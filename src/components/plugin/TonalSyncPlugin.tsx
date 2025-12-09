@@ -8,6 +8,8 @@ import { ToggleSwitch } from "./ToggleSwitch";
 import { KeyScaleSelector } from "./KeyScaleSelector";
 import { AIPEIndicator } from "./AIPEIndicator";
 import { ControlSection } from "./ControlSection";
+import { HarmonicRetunePanel } from "./HarmonicRetunePanel";
+import { AIPEAdvancedPanel } from "./AIPEAdvancedPanel";
 import { Mic, Volume2 } from "lucide-react";
 
 export const TonalSyncPlugin = () => {
@@ -24,6 +26,16 @@ export const TonalSyncPlugin = () => {
   const [realTimeMode, setRealTimeMode] = useState(true);
   const [aipeEnabled, setAipeEnabled] = useState(true);
   const [harmonicRetune, setHarmonicRetune] = useState(true);
+
+  // Harmonic Retune controls
+  const [harmonicFocus, setHarmonicFocus] = useState(75);
+  const [overtoneBias, setOvertoneBias] = useState(0);
+
+  // AIPE Advanced controls
+  const [adaptiveMode, setAdaptiveMode] = useState(true);
+  const [vibratoIsolation, setVibratoIsolation] = useState(60);
+  const [slidePreservation, setSlidePreservation] = useState(true);
+  const [intentSensitivity, setIntentSensitivity] = useState(70);
 
   // Simulated levels
   const [inputLevel, setInputLevel] = useState(0);
@@ -92,6 +104,14 @@ export const TonalSyncPlugin = () => {
               <AIPEIndicator
                 isActive={aipeEnabled}
                 confidence={Math.round(aipeConfidence)}
+              />
+
+              <HarmonicRetunePanel
+                harmonicFocus={harmonicFocus}
+                onHarmonicFocusChange={setHarmonicFocus}
+                overtoneBias={overtoneBias}
+                onOvertoneBiasChange={setOvertoneBias}
+                isActive={harmonicRetune}
               />
             </div>
 
@@ -208,6 +228,19 @@ export const TonalSyncPlugin = () => {
                   />
                 </div>
               </ControlSection>
+
+              <AIPEAdvancedPanel
+                isActive={aipeEnabled}
+                adaptiveMode={adaptiveMode}
+                onAdaptiveModeChange={setAdaptiveMode}
+                vibratoIsolation={vibratoIsolation}
+                onVibratoIsolationChange={setVibratoIsolation}
+                slidePreservation={slidePreservation}
+                onSlidePreservationChange={setSlidePreservation}
+                intentSensitivity={intentSensitivity}
+                onIntentSensitivityChange={setIntentSensitivity}
+                confidence={Math.round(aipeConfidence)}
+              />
             </div>
           </div>
 
