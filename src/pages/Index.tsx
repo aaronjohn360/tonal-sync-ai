@@ -1,13 +1,18 @@
-// Update this page (the content is just a fallback if you fail to update the page)
+import { TonalSyncPlugin } from "@/components/plugin/TonalSyncPlugin";
+import { Helmet } from "react-helmet";
 
 const Index = () => {
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background">
-      <div className="text-center">
-        <h1 className="mb-4 text-4xl font-bold">Welcome to Your Blank App</h1>
-        <p className="text-xl text-muted-foreground">Start building your amazing project here!</p>
-      </div>
-    </div>
+    <>
+      <Helmet>
+        <title>Tonal Sync - AI-Powered Pitch Correction Plugin by Sweav</title>
+        <meta
+          name="description"
+          content="Tonal Sync 2025 - Zero-latency real-time pitch correction with Adaptive AI Pitch Engine (AIPE), advanced graph mode, and harmonic retune technology."
+        />
+      </Helmet>
+      <TonalSyncPlugin />
+    </>
   );
 };
 
