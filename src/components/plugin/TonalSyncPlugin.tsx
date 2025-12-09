@@ -10,7 +10,10 @@ import { AIPEIndicator } from "./AIPEIndicator";
 import { ControlSection } from "./ControlSection";
 import { HarmonicRetunePanel } from "./HarmonicRetunePanel";
 import { AIPEAdvancedPanel } from "./AIPEAdvancedPanel";
+import { AudioControlBar } from "./AudioControlBar";
+import { useAudioProcessor } from "@/hooks/useAudioProcessor";
 import { Mic, Volume2 } from "lucide-react";
+import { toast } from "sonner";
 
 export const TonalSyncPlugin = () => {
   // Control states
@@ -37,28 +40,58 @@ export const TonalSyncPlugin = () => {
   const [slidePreservation, setSlidePreservation] = useState(true);
   const [intentSensitivity, setIntentSensitivity] = useState(70);
 
-  // Simulated levels
-  const [inputLevel, setInputLevel] = useState(0);
-  const [outputLevel, setOutputLevel] = useState(0);
+  // Key and scale selection
+  const [selectedKey, setSelectedKey] = useState("C");
+  const [selectedScale, setSelectedScale] = useState("Major");
+
+  // Audio processor hook
+  const audioProcessor = useAudioProcessor({
+    retuneSpeed,
+    humanize,
+    formant,
+    mix,
+    selectedKey,
+    selectedScale
+  });
+
+  // Loading and error states
+  const [isLoading, setIsLoading] = useState(false);
+  const [audioError, setAudioError] = useState<string | null>(null);
+
+  // AIPE confidence simulation based on audio input
   const [aipeConfidence, setAipeConfidence] = useState(0);
 
-  // Simulate audio levels
   useEffect(() => {
-    const interval = setInterval(() => {
-      const base = 50 + Math.sin(Date.now() / 500) * 30;
-      const noise = Math.random() * 20;
-      setInputLevel(Math.min(100, Math.max(0, base + noise)));
-      setOutputLevel(Math.min(100, Math.max(0, base + noise - 5 + Math.random() * 10)));
-      
-      if (aipeEnabled) {
-        setAipeConfidence((prev) => {
-          const target = 85 + Math.random() * 15;
-          return prev + (target - prev) * 0.1;
-        });
+    if (aipeEnabled && audioProcessor.isActive && audioProcessor.inputLevel > 5) {
+      setAipeConfidence((prev) => {
+        const target = 85 + Math.random() * 15;
+        return prev + (target - prev) * 0.1;
+      });
+    } else if (!audioProcessor.isActive) {
+      setAipeConfidence(0);
+    }
+  }, [aipeEnabled, audioProcessor.isActive, audioProcessor.inputLevel]);
+
+  const handleAudioToggle = async () => {
+    setAudioError(null);
+    
+    if (audioProcessor.isActive) {
+      audioProcessor.stop();
+      toast.success("Audio stopped");
+    } else {
+      setIsLoading(true);
+      try {
+        await audioProcessor.start();
+        toast.success("Microphone active - sing into your mic!");
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : "Failed to access microphone";
+        setAudioError(errorMessage);
+        toast.error(errorMessage);
+      } finally {
+        setIsLoading(false);
       }
-    }, 50);
-    return () => clearInterval(interval);
-  }, [aipeEnabled]);
+    }
+  };
 
   return (
     <div className="min-h-screen bg-background p-4 md:p-8 flex items-center justify-center">
@@ -73,32 +106,52 @@ export const TonalSyncPlugin = () => {
         <Header />
 
         <div className="p-4 md:p-6 space-y-4">
+          {/* Audio Control Bar */}
+          <AudioControlBar
+            isActive={audioProcessor.isActive}
+            onToggle={handleAudioToggle}
+            detectedNote={audioProcessor.detectedNote}
+            detectedPitch={audioProcessor.detectedPitch}
+            correctedNote={audioProcessor.correctedNote}
+            correctedPitch={audioProcessor.correctedPitch}
+            pitchError={audioProcessor.pitchError}
+            isLoading={isLoading}
+            error={audioError}
+          />
+
           {/* Main controls row */}
           <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
             {/* Left panel - Input/Key */}
             <div className="space-y-4">
               <ControlSection title="Input">
                 <div className="flex items-center justify-center gap-4">
-                  <VUMeter level={inputLevel} peak={inputLevel} label="In" />
+                  <VUMeter level={audioProcessor.inputLevel} peak={audioProcessor.inputLevel} label="In" />
                   <div className="flex flex-col items-center gap-2">
                     <div className={cn(
                       "w-12 h-12 rounded-full",
                       "bg-muted border border-border",
                       "flex items-center justify-center",
-                      inputLevel > 10 && "border-primary shadow-glow"
+                      audioProcessor.inputLevel > 10 && "border-primary shadow-glow"
                     )}>
                       <Mic className={cn(
                         "w-6 h-6",
-                        inputLevel > 10 ? "text-primary" : "text-muted-foreground"
+                        audioProcessor.inputLevel > 10 ? "text-primary" : "text-muted-foreground"
                       )} />
                     </div>
-                    <span className="text-[10px] text-muted-foreground">TRACKING</span>
+                    <span className="text-[10px] text-muted-foreground">
+                      {audioProcessor.isActive ? "LIVE" : "TRACKING"}
+                    </span>
                   </div>
                 </div>
               </ControlSection>
 
               <ControlSection title="Key & Scale">
-                <KeyScaleSelector />
+                <KeyScaleSelector 
+                  selectedKey={selectedKey}
+                  onKeyChange={setSelectedKey}
+                  selectedScale={selectedScale}
+                  onScaleChange={setSelectedScale}
+                />
               </ControlSection>
 
               <AIPEIndicator
@@ -183,16 +236,16 @@ export const TonalSyncPlugin = () => {
                       "w-12 h-12 rounded-full",
                       "bg-muted border border-border",
                       "flex items-center justify-center",
-                      outputLevel > 10 && "border-primary shadow-glow"
+                      audioProcessor.outputLevel > 10 && "border-primary shadow-glow"
                     )}>
                       <Volume2 className={cn(
                         "w-6 h-6",
-                        outputLevel > 10 ? "text-primary" : "text-muted-foreground"
+                        audioProcessor.outputLevel > 10 ? "text-primary" : "text-muted-foreground"
                       )} />
                     </div>
                     <span className="text-[10px] text-muted-foreground">OUTPUT</span>
                   </div>
-                  <VUMeter level={outputLevel} peak={outputLevel} label="Out" />
+                  <VUMeter level={audioProcessor.outputLevel} peak={audioProcessor.outputLevel} label="Out" />
                 </div>
               </ControlSection>
 

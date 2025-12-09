@@ -4,16 +4,39 @@ import { ChevronDown } from "lucide-react";
 
 interface KeyScaleSelectorProps {
   className?: string;
+  selectedKey?: string;
+  onKeyChange?: (key: string) => void;
+  selectedScale?: string;
+  onScaleChange?: (scale: string) => void;
 }
 
 const keys = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
 const scales = ["Major", "Minor", "Chromatic", "Pentatonic", "Blues", "Dorian", "Mixolydian"];
 
-export const KeyScaleSelector = ({ className }: KeyScaleSelectorProps) => {
-  const [selectedKey, setSelectedKey] = useState("C");
-  const [selectedScale, setSelectedScale] = useState("Major");
+export const KeyScaleSelector = ({ 
+  className,
+  selectedKey: controlledKey,
+  onKeyChange,
+  selectedScale: controlledScale,
+  onScaleChange
+}: KeyScaleSelectorProps) => {
+  const [internalKey, setInternalKey] = useState("C");
+  const [internalScale, setInternalScale] = useState("Major");
   const [isKeyOpen, setIsKeyOpen] = useState(false);
   const [isScaleOpen, setIsScaleOpen] = useState(false);
+
+  const selectedKey = controlledKey ?? internalKey;
+  const selectedScale = controlledScale ?? internalScale;
+
+  const handleKeyChange = (key: string) => {
+    setInternalKey(key);
+    onKeyChange?.(key);
+  };
+
+  const handleScaleChange = (scale: string) => {
+    setInternalScale(scale);
+    onScaleChange?.(scale);
+  };
 
   return (
     <div className={cn("flex flex-col gap-3", className)}>
@@ -49,7 +72,7 @@ export const KeyScaleSelector = ({ className }: KeyScaleSelectorProps) => {
                   <button
                     key={key}
                     onClick={() => {
-                      setSelectedKey(key);
+                      handleKeyChange(key);
                       setIsKeyOpen(false);
                     }}
                     className={cn(
@@ -94,7 +117,7 @@ export const KeyScaleSelector = ({ className }: KeyScaleSelectorProps) => {
                 <button
                   key={scale}
                   onClick={() => {
-                    setSelectedScale(scale);
+                    handleScaleChange(scale);
                     setIsScaleOpen(false);
                   }}
                   className={cn(
