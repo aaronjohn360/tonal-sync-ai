@@ -184,12 +184,13 @@ export const TonalSyncPlugin = () => {
           "w-full max-w-7xl",
           "bg-gradient-to-b from-card to-background",
           "rounded-2xl shadow-panel",
-          "glow-border overflow-hidden"
+          "glow-border overflow-hidden",
+          "animate-scale-in"
         )}
       >
         <Header />
 
-        <div className="p-4 md:p-6 space-y-4">
+        <div className="p-4 md:p-6 space-y-4 animate-fade-in" style={{ animationDelay: '200ms' }}>
           {/* Audio Control Bar */}
           <AudioControlBar
             isActive={audioProcessor.isActive}

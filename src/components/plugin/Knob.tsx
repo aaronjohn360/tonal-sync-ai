@@ -82,7 +82,7 @@ export const Knob = ({
   }, [isDragging, handleMouseMove, handleMouseUp]);
 
   return (
-    <div className={cn("flex flex-col items-center gap-2", className)}>
+    <div className={cn("flex flex-col items-center gap-2 group", className)}>
       <div
         ref={knobRef}
         className={cn(
@@ -90,8 +90,10 @@ export const Knob = ({
           "relative rounded-full cursor-pointer select-none",
           "bg-gradient-to-b from-muted to-background",
           "shadow-knob border border-border/50",
-          "transition-all duration-150",
-          isDragging && "scale-105 shadow-glow"
+          "transition-all duration-300",
+          "hover:scale-105 hover:border-primary/50",
+          "active:scale-95",
+          isDragging && "scale-110 shadow-glow"
         )}
         onMouseDown={handleMouseDown}
       >
@@ -122,7 +124,7 @@ export const Knob = ({
             strokeWidth="4"
             strokeLinecap="round"
             strokeDasharray={`${normalizedValue * 2.7 * 2.64} 1000`}
-            className="drop-shadow-[0_0_6px_hsl(var(--primary))]"
+            className="drop-shadow-[0_0_6px_hsl(var(--primary))] transition-all duration-200"
           />
         </svg>
 
@@ -132,7 +134,8 @@ export const Knob = ({
             "absolute inset-3 rounded-full",
             "bg-gradient-to-b from-card to-background",
             "border border-border/30 shadow-inner",
-            "flex items-center justify-center"
+            "flex items-center justify-center",
+            "transition-transform duration-150"
           )}
           style={{ transform: `rotate(${rotation}deg)` }}
         >
@@ -141,7 +144,8 @@ export const Knob = ({
             className={cn(
               indicatorSizes[size],
               "absolute top-2 rounded-full",
-              "bg-primary shadow-[0_0_8px_hsl(var(--primary))]"
+              "bg-primary shadow-[0_0_8px_hsl(var(--primary))]",
+              "transition-all duration-200"
             )}
           />
         </div>
@@ -150,16 +154,27 @@ export const Knob = ({
         {isDragging && (
           <div className="absolute inset-0 rounded-full bg-primary/10 animate-glow-pulse" />
         )}
+        
+        {/* Pulse ring on hover */}
+        <div className={cn(
+          "absolute inset-0 rounded-full border-2 border-primary/30",
+          "opacity-0 group-hover:opacity-100 transition-opacity duration-300",
+          isDragging && "animate-pulse-ring"
+        )} />
       </div>
 
       {/* Label */}
-      <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+      <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider group-hover:text-foreground transition-colors duration-200">
         {label}
       </span>
 
       {/* Value display */}
       {showValue && (
-        <span className="text-sm font-display text-primary tabular-nums">
+        <span className={cn(
+          "text-sm font-display text-primary tabular-nums",
+          "transition-all duration-200",
+          isDragging && "scale-110 font-bold"
+        )}>
           {value}
           {unit && <span className="text-muted-foreground ml-0.5">{unit}</span>}
         </span>

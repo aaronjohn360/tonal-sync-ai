@@ -69,7 +69,9 @@ export const AudioControlBar = ({
     <div className={cn(
       "flex items-center justify-between gap-4 p-4",
       "bg-muted/50 rounded-xl border",
-      isActive && !isBypassed ? "border-primary/50 shadow-glow" : "border-border"
+      "transition-all duration-500",
+      "animate-fade-in",
+      isActive && !isBypassed ? "border-primary/50 shadow-glow" : "border-border hover:border-primary/30"
     )}>
       {/* Input Selection Dropdown */}
       <DropdownMenu open={isDropdownOpen} onOpenChange={handleDropdownOpen}>
@@ -80,26 +82,30 @@ export const AudioControlBar = ({
               "flex items-center gap-3 px-5 py-3 rounded-xl",
               "font-display uppercase text-sm tracking-wider",
               "transition-all duration-300",
+              "hover:scale-105 active:scale-95",
               isActive
                 ? "bg-primary text-primary-foreground shadow-glow"
-                : "bg-card border border-border hover:border-primary/50",
-              isLoading && "opacity-50 cursor-not-allowed"
+                : "bg-card border border-border hover:border-primary/50 hover:shadow-glow",
+              isLoading && "opacity-50 cursor-not-allowed animate-pulse"
             )}
           >
             {isActive ? (
-              <Mic className="w-5 h-5 animate-pulse" />
+              <Mic className="w-5 h-5 animate-bounce-subtle" />
             ) : (
-              <MicOff className="w-5 h-5" />
+              <MicOff className="w-5 h-5 transition-transform group-hover:scale-110" />
             )}
             <span className="max-w-[150px] truncate">
               {isLoading ? "Starting..." : isActive ? selectedDeviceLabel : "Select Input"}
             </span>
-            <ChevronDown className="w-4 h-4" />
+            <ChevronDown className={cn(
+              "w-4 h-4 transition-transform duration-300",
+              isDropdownOpen && "rotate-180"
+            )} />
           </button>
         </DropdownMenuTrigger>
         <DropdownMenuContent 
           align="start" 
-          className="w-[280px] bg-card border-border"
+          className="w-[280px] bg-card border-border z-50 animate-scale-in"
         >
           {availableDevices.length === 0 ? (
             <DropdownMenuItem disabled className="text-muted-foreground">
@@ -190,27 +196,36 @@ export const AudioControlBar = ({
           onClick={onBypassToggle}
           disabled={!isActive}
           className={cn(
-            "flex items-center gap-2 px-4 py-3 rounded-lg border transition-all duration-200",
+            "flex items-center gap-2 px-4 py-3 rounded-lg border transition-all duration-300",
             "font-display uppercase text-xs tracking-wider",
+            "hover:scale-105 active:scale-95",
             !isActive && "opacity-50 cursor-not-allowed",
             isBypassed 
-              ? "border-destructive/50 text-destructive bg-destructive/10"
-              : "border-primary/50 text-primary bg-primary/10 hover:bg-primary/20"
+              ? "border-destructive/50 text-destructive bg-destructive/10 hover:bg-destructive/20"
+              : "border-primary/50 text-primary bg-primary/10 hover:bg-primary/20 hover:shadow-glow"
           )}
         >
-          <Power className="w-4 h-4" />
+          <Power className={cn(
+            "w-4 h-4 transition-transform duration-300",
+            !isBypassed && isActive && "animate-spin-slow"
+          )} />
           <span>{isBypassed ? "Bypassed" : "Active"}</span>
         </button>
 
         {/* Status Indicator */}
-        <div className={cn(
-          "w-3 h-3 rounded-full transition-all duration-300",
-          isActive && !isBypassed
-            ? "bg-primary animate-pulse shadow-glow" 
-            : isActive && isBypassed
-              ? "bg-yellow-500"
-              : "bg-muted-foreground/30"
-        )} />
+        <div className="relative">
+          <div className={cn(
+            "w-3 h-3 rounded-full transition-all duration-300",
+            isActive && !isBypassed
+              ? "bg-primary shadow-glow" 
+              : isActive && isBypassed
+                ? "bg-yellow-500"
+                : "bg-muted-foreground/30"
+          )} />
+          {isActive && !isBypassed && (
+            <div className="absolute inset-0 rounded-full bg-primary animate-pulse-ring" />
+          )}
+        </div>
       </div>
     </div>
   );

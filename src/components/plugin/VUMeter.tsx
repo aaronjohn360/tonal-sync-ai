@@ -29,7 +29,7 @@ export const VUMeter = ({ level, peak, label, className }: VUMeterProps) => {
   const peakSegment = Math.floor((displayPeak / 100) * segments);
 
   return (
-    <div className={cn("flex flex-col items-center gap-2", className)}>
+    <div className={cn("flex flex-col items-center gap-2 group", className)}>
       <div className="flex gap-0.5 h-32 items-end">
         {Array.from({ length: segments }).map((_, i) => {
           const isActive = i < activeSegments;
@@ -41,19 +41,21 @@ export const VUMeter = ({ level, peak, label, className }: VUMeterProps) => {
             <div
               key={i}
               className={cn(
-                "w-2 rounded-sm transition-all duration-75",
+                "w-2 rounded-sm transition-all duration-100",
+                "transform hover:scale-y-110",
                 isActive || isPeak
                   ? isRed
-                    ? "bg-destructive shadow-[0_0_8px_hsl(var(--destructive))]"
+                    ? "bg-destructive shadow-[0_0_8px_hsl(var(--destructive))] animate-pulse"
                     : isYellow
                     ? "bg-yellow-500 shadow-[0_0_6px_rgb(234,179,8)]"
                     : "bg-primary shadow-[0_0_6px_hsl(var(--primary))]"
                   : "bg-muted/50",
                 isPeak && "opacity-100",
-                !isActive && !isPeak && "opacity-30"
+                !isActive && !isPeak && "opacity-30 group-hover:opacity-50"
               )}
               style={{
                 height: `${((i + 1) / segments) * 100}%`,
+                animationDelay: `${i * 30}ms`,
               }}
             />
           );
@@ -68,7 +70,11 @@ export const VUMeter = ({ level, peak, label, className }: VUMeterProps) => {
         <span>0</span>
       </div>
 
-      <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+      <span className={cn(
+        "text-xs font-medium uppercase tracking-wider",
+        "transition-colors duration-200",
+        displayLevel > 80 ? "text-destructive" : displayLevel > 10 ? "text-primary" : "text-muted-foreground"
+      )}>
         {label}
       </span>
     </div>
