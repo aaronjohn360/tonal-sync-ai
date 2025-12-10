@@ -16,12 +16,14 @@ export const ToggleSwitch = ({
   className,
 }: ToggleSwitchProps) => {
   return (
-    <div className={cn("flex flex-col items-center gap-2", className)}>
+    <div className={cn("flex flex-col items-center gap-2 group", className)}>
       <button
         onClick={() => onChange(!isOn)}
         className={cn(
           "relative w-14 h-7 rounded-full transition-all duration-300",
           "border border-border",
+          "hover:scale-105 active:scale-95",
+          "hover:border-primary/50",
           isOn
             ? "bg-primary/20 border-primary shadow-glow"
             : "bg-muted"
@@ -34,7 +36,12 @@ export const ToggleSwitch = ({
               ? "left-7 bg-primary shadow-[0_0_10px_hsl(var(--primary))]"
               : "left-1 bg-muted-foreground"
           )}
-        />
+        >
+          {/* Inner glow indicator */}
+          {isOn && (
+            <div className="absolute inset-0 rounded-full bg-white/30 animate-pulse" />
+          )}
+        </div>
         
         {/* Glow effect when on */}
         {isOn && (
@@ -43,13 +50,17 @@ export const ToggleSwitch = ({
       </button>
 
       <div className="text-center">
-        <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider block">
+        <span className={cn(
+          "text-xs font-medium uppercase tracking-wider block",
+          "transition-colors duration-200",
+          isOn ? "text-foreground" : "text-muted-foreground group-hover:text-foreground"
+        )}>
           {label}
         </span>
         {sublabel && (
           <span className={cn(
-            "text-xs font-display",
-            isOn ? "text-primary" : "text-muted-foreground"
+            "text-xs font-display transition-all duration-200",
+            isOn ? "text-primary animate-pulse" : "text-muted-foreground"
           )}>
             {sublabel}
           </span>
