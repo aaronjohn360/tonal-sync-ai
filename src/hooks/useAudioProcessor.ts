@@ -20,15 +20,24 @@ const SCALE_PATTERNS: { [key: string]: number[] } = {
   "Mixolydian": [0, 2, 4, 5, 7, 9, 10]
 };
 
+export interface AudioDevice {
+  deviceId: string;
+  label: string;
+}
+
 interface AudioProcessorState {
   isActive: boolean;
+  isBypassed: boolean;
   inputLevel: number;
   outputLevel: number;
   detectedPitch: number;
   detectedNote: string;
   correctedPitch: number;
   correctedNote: string;
-  pitchError: number; // cents
+  pitchError: number;
+  availableDevices: AudioDevice[];
+  selectedDevice: string | null;
+  pitchHistory: { input: number; corrected: number; time: number }[];
 }
 
 interface UseAudioProcessorOptions {
@@ -43,23 +52,89 @@ interface UseAudioProcessorOptions {
 export const useAudioProcessor = (options: UseAudioProcessorOptions) => {
   const [state, setState] = useState<AudioProcessorState>({
     isActive: false,
+    isBypassed: false,
     inputLevel: 0,
     outputLevel: 0,
     detectedPitch: 0,
     detectedNote: "-",
     correctedPitch: 0,
     correctedNote: "-",
-    pitchError: 0
+    pitchError: 0,
+    availableDevices: [],
+    selectedDevice: null,
+    pitchHistory: []
   });
 
   const audioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
   const gainNodeRef = useRef<GainNode | null>(null);
-  const pitchShifterRef = useRef<AudioWorkletNode | null>(null);
+  const pitchShifterGainRef = useRef<GainNode | null>(null);
+  const oscillatorRef = useRef<OscillatorNode | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const animationFrameRef = useRef<number | null>(null);
   const correctedPitchRef = useRef<number>(0);
+  const isBypassedRef = useRef<boolean>(false);
+  const pitchHistoryRef = useRef<{ input: number; corrected: number; time: number }[]>([]);
+
+  // Enumerate audio devices
+  const enumerateDevices = useCallback(async () => {
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const audioInputs = devices
+        .filter(device => device.kind === 'audioinput')
+        .map(device => ({
+          deviceId: device.deviceId,
+          label: device.label || `Microphone ${device.deviceId.slice(0, 8)}`
+        }));
+      
+      setState(prev => ({
+        ...prev,
+        availableDevices: audioInputs,
+        selectedDevice: prev.selectedDevice || (audioInputs[0]?.deviceId ?? null)
+      }));
+      
+      return audioInputs;
+    } catch (error) {
+      console.error("Failed to enumerate devices:", error);
+      return [];
+    }
+  }, []);
+
+  // Request permission and enumerate devices
+  const requestPermissionAndEnumerate = useCallback(async () => {
+    try {
+      // Request permission first to get device labels
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      stream.getTracks().forEach(track => track.stop());
+      return await enumerateDevices();
+    } catch (error) {
+      console.error("Failed to get permission:", error);
+      throw error;
+    }
+  }, [enumerateDevices]);
+
+  // Select device
+  const selectDevice = useCallback((deviceId: string) => {
+    setState(prev => ({ ...prev, selectedDevice: deviceId }));
+  }, []);
+
+  // Set bypass
+  const setBypass = useCallback((bypassed: boolean) => {
+    isBypassedRef.current = bypassed;
+    setState(prev => ({ ...prev, isBypassed: bypassed }));
+    
+    // Mute/unmute the pitch shifted output
+    if (pitchShifterGainRef.current && gainNodeRef.current) {
+      if (bypassed) {
+        pitchShifterGainRef.current.gain.value = 0;
+        gainNodeRef.current.gain.value = options.mix / 100;
+      } else {
+        pitchShifterGainRef.current.gain.value = options.mix / 100;
+        gainNodeRef.current.gain.value = 0;
+      }
+    }
+  }, [options.mix]);
 
   // Get valid notes for current key/scale
   const getScaleNotes = useCallback(() => {
@@ -69,15 +144,15 @@ export const useAudioProcessor = (options: UseAudioProcessorOptions) => {
   }, [options.selectedKey, options.selectedScale]);
 
   // Find nearest note in scale
-  const findNearestNote = useCallback((frequency: number): { note: string; freq: number; cents: number } => {
-    if (frequency <= 0) return { note: "-", freq: 0, cents: 0 };
+  const findNearestNote = useCallback((frequency: number): { note: string; freq: number; cents: number; octave: number } => {
+    if (frequency <= 0) return { note: "-", freq: 0, cents: 0, octave: 0 };
 
     const scaleNotes = getScaleNotes();
     let nearestNote = "";
     let nearestFreq = 0;
     let minCents = Infinity;
+    let nearestOctave = 0;
 
-    // Check multiple octaves
     for (let octave = 0; octave <= 8; octave++) {
       for (const note of scaleNotes) {
         const baseFreq = NOTE_FREQUENCIES[note];
@@ -88,11 +163,12 @@ export const useAudioProcessor = (options: UseAudioProcessorOptions) => {
           minCents = cents;
           nearestNote = note;
           nearestFreq = noteFreq;
+          nearestOctave = octave;
         }
       }
     }
 
-    return { note: nearestNote, freq: nearestFreq, cents: minCents };
+    return { note: nearestNote, freq: nearestFreq, cents: minCents, octave: nearestOctave };
   }, [getScaleNotes]);
 
   // Autocorrelation pitch detection (simplified YIN algorithm)
@@ -101,7 +177,6 @@ export const useAudioProcessor = (options: UseAudioProcessorOptions) => {
     const MAX_SAMPLES = Math.floor(SIZE / 2);
     const correlations = new Float32Array(MAX_SAMPLES);
 
-    // Calculate autocorrelation
     for (let lag = 0; lag < MAX_SAMPLES; lag++) {
       let sum = 0;
       for (let i = 0; i < MAX_SAMPLES; i++) {
@@ -110,7 +185,6 @@ export const useAudioProcessor = (options: UseAudioProcessorOptions) => {
       correlations[lag] = sum;
     }
 
-    // Find the first peak
     let maxCorrelation = 0;
     let bestLag = 0;
     let foundPeak = false;
@@ -121,7 +195,6 @@ export const useAudioProcessor = (options: UseAudioProcessorOptions) => {
         bestLag = lag;
         foundPeak = true;
       }
-      // Break if we've passed the peak
       if (foundPeak && correlations[lag] < maxCorrelation * 0.9) {
         break;
       }
@@ -141,6 +214,19 @@ export const useAudioProcessor = (options: UseAudioProcessorOptions) => {
     return Math.sqrt(sum / buffer.length);
   };
 
+  // Update pitch shifter oscillator
+  const updatePitchShifter = useCallback((targetFreq: number) => {
+    if (!audioContextRef.current || !oscillatorRef.current) return;
+    
+    if (targetFreq > 0 && !isBypassedRef.current) {
+      oscillatorRef.current.frequency.setTargetAtTime(
+        targetFreq,
+        audioContextRef.current.currentTime,
+        0.01 // Smooth transition
+      );
+    }
+  }, []);
+
   // Main audio processing loop
   const processAudio = useCallback(() => {
     if (!analyserRef.current || !audioContextRef.current) return;
@@ -152,34 +238,36 @@ export const useAudioProcessor = (options: UseAudioProcessorOptions) => {
     const rms = calculateRMS(buffer);
     const inputLevel = Math.min(100, rms * 500);
 
-    // Detect pitch
     const detectedPitch = detectPitch(buffer, audioContextRef.current.sampleRate);
-    
-    // Find nearest note and calculate correction
     const { note, freq, cents } = findNearestNote(detectedPitch);
     
-    // Apply retune speed (faster = snappier correction)
     const retuneAmount = options.retuneSpeed / 100;
     const humanizeAmount = options.humanize / 100;
     const randomHumanize = (Math.random() - 0.5) * humanizeAmount * 10;
     
-    // Smooth pitch correction
     let targetPitch = freq;
     if (detectedPitch > 0 && freq > 0) {
       const correctionFactor = 1 - (1 - retuneAmount) * 0.9;
       const pitchRatio = freq / detectedPitch;
       const correctedRatio = 1 + (pitchRatio - 1) * correctionFactor;
       targetPitch = detectedPitch * correctedRatio;
-      
-      // Add humanization
       targetPitch *= 1 + (randomHumanize / 1200);
+      
+      // Update pitch shifter with corrected frequency
+      updatePitchShifter(targetPitch);
     }
 
     correctedPitchRef.current = targetPitch;
 
-    // Calculate output level based on mix
+    // Update pitch history for graph visualization
+    const now = Date.now();
+    pitchHistoryRef.current = [
+      ...pitchHistoryRef.current.filter(p => now - p.time < 5000),
+      { input: detectedPitch, corrected: targetPitch, time: now }
+    ].slice(-250); // Keep last 250 samples
+
     const mixAmount = options.mix / 100;
-    const outputLevel = inputLevel * (0.8 + mixAmount * 0.2);
+    const outputLevel = isBypassedRef.current ? inputLevel : inputLevel * (0.8 + mixAmount * 0.2);
 
     setState(prev => ({
       ...prev,
@@ -189,54 +277,88 @@ export const useAudioProcessor = (options: UseAudioProcessorOptions) => {
       detectedNote: note || "-",
       correctedPitch: Math.round(targetPitch * 10) / 10,
       correctedNote: note || "-",
-      pitchError: Math.round(cents)
+      pitchError: Math.round(cents),
+      pitchHistory: pitchHistoryRef.current
     }));
 
     animationFrameRef.current = requestAnimationFrame(processAudio);
-  }, [detectPitch, findNearestNote, options.retuneSpeed, options.humanize, options.mix]);
+  }, [detectPitch, findNearestNote, options.retuneSpeed, options.humanize, options.mix, updatePitchShifter]);
 
-  // Start audio processing
-  const start = useCallback(async () => {
+  // Start audio processing with selected device
+  const start = useCallback(async (deviceId?: string) => {
     try {
-      // Create audio context
+      const targetDevice = deviceId || state.selectedDevice;
+      
       audioContextRef.current = new AudioContext({ sampleRate: 44100 });
 
-      // Request microphone access
       streamRef.current = await navigator.mediaDevices.getUserMedia({
         audio: {
+          deviceId: targetDevice ? { exact: targetDevice } : undefined,
           echoCancellation: false,
           noiseSuppression: false,
           autoGainControl: false
         }
       });
 
-      // Create audio nodes
       sourceRef.current = audioContextRef.current.createMediaStreamSource(streamRef.current);
       analyserRef.current = audioContextRef.current.createAnalyser();
       analyserRef.current.fftSize = 2048;
       analyserRef.current.smoothingTimeConstant = 0.8;
 
+      // Create gain node for dry signal (used in bypass mode)
       gainNodeRef.current = audioContextRef.current.createGain();
-      gainNodeRef.current.gain.value = options.mix / 100;
+      gainNodeRef.current.gain.value = 0; // Start with wet signal
 
-      // Connect nodes: source -> analyser -> gain -> destination
+      // Create oscillator-based pitch shifter
+      oscillatorRef.current = audioContextRef.current.createOscillator();
+      oscillatorRef.current.type = 'sine';
+      oscillatorRef.current.frequency.value = 440;
+      
+      // Create gain for pitch shifted signal
+      pitchShifterGainRef.current = audioContextRef.current.createGain();
+      pitchShifterGainRef.current.gain.value = options.mix / 100;
+
+      // Connect: source -> analyser
       sourceRef.current.connect(analyserRef.current);
+      
+      // Dry path (bypass): analyser -> gain -> destination
       analyserRef.current.connect(gainNodeRef.current);
       gainNodeRef.current.connect(audioContextRef.current.destination);
+      
+      // Wet path (pitch shifted): oscillator -> pitchShifterGain -> destination
+      oscillatorRef.current.connect(pitchShifterGainRef.current);
+      pitchShifterGainRef.current.connect(audioContextRef.current.destination);
+      
+      oscillatorRef.current.start();
 
-      setState(prev => ({ ...prev, isActive: true }));
+      isBypassedRef.current = false;
+      pitchHistoryRef.current = [];
+      
+      setState(prev => ({ 
+        ...prev, 
+        isActive: true, 
+        isBypassed: false,
+        selectedDevice: targetDevice || prev.selectedDevice,
+        pitchHistory: []
+      }));
+      
       processAudio();
 
     } catch (error) {
       console.error("Failed to start audio processing:", error);
       throw error;
     }
-  }, [options.mix, processAudio]);
+  }, [options.mix, processAudio, state.selectedDevice]);
 
   // Stop audio processing
   const stop = useCallback(() => {
     if (animationFrameRef.current) {
       cancelAnimationFrame(animationFrameRef.current);
+    }
+
+    if (oscillatorRef.current) {
+      oscillatorRef.current.stop();
+      oscillatorRef.current.disconnect();
     }
 
     if (sourceRef.current) {
@@ -251,6 +373,10 @@ export const useAudioProcessor = (options: UseAudioProcessorOptions) => {
       gainNodeRef.current.disconnect();
     }
 
+    if (pitchShifterGainRef.current) {
+      pitchShifterGainRef.current.disconnect();
+    }
+
     if (streamRef.current) {
       streamRef.current.getTracks().forEach(track => track.stop());
     }
@@ -259,22 +385,27 @@ export const useAudioProcessor = (options: UseAudioProcessorOptions) => {
       audioContextRef.current.close();
     }
 
-    setState({
+    pitchHistoryRef.current = [];
+
+    setState(prev => ({
+      ...prev,
       isActive: false,
+      isBypassed: false,
       inputLevel: 0,
       outputLevel: 0,
       detectedPitch: 0,
       detectedNote: "-",
       correctedPitch: 0,
       correctedNote: "-",
-      pitchError: 0
-    });
+      pitchError: 0,
+      pitchHistory: []
+    }));
   }, []);
 
-  // Update gain when mix changes
+  // Update gains when mix changes
   useEffect(() => {
-    if (gainNodeRef.current) {
-      gainNodeRef.current.gain.value = options.mix / 100;
+    if (pitchShifterGainRef.current && !isBypassedRef.current) {
+      pitchShifterGainRef.current.gain.value = options.mix / 100;
     }
   }, [options.mix]);
 
@@ -285,10 +416,26 @@ export const useAudioProcessor = (options: UseAudioProcessorOptions) => {
     };
   }, [stop]);
 
+  // Listen for device changes
+  useEffect(() => {
+    const handleDeviceChange = () => {
+      enumerateDevices();
+    };
+
+    navigator.mediaDevices.addEventListener('devicechange', handleDeviceChange);
+    return () => {
+      navigator.mediaDevices.removeEventListener('devicechange', handleDeviceChange);
+    };
+  }, [enumerateDevices]);
+
   return {
     ...state,
     start,
     stop,
-    toggle: state.isActive ? stop : start
+    toggle: state.isActive ? stop : start,
+    enumerateDevices,
+    requestPermissionAndEnumerate,
+    selectDevice,
+    setBypass
   };
 };
