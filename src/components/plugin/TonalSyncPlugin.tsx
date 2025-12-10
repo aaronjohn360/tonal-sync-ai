@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { cn } from "@/lib/utils";
 import { Header } from "./Header";
 import { Knob } from "./Knob";
@@ -11,6 +11,9 @@ import { ControlSection } from "./ControlSection";
 import { HarmonicRetunePanel } from "./HarmonicRetunePanel";
 import { AIPEAdvancedPanel } from "./AIPEAdvancedPanel";
 import { AudioControlBar } from "./AudioControlBar";
+import { PresetManager, PluginPreset } from "./PresetManager";
+import { NeuralEnginePanel } from "./NeuralEnginePanel";
+import { VocalChainPanel } from "./VocalChainPanel";
 import { useAudioProcessor } from "@/hooks/useAudioProcessor";
 import { Mic, Volume2 } from "lucide-react";
 import { toast } from "sonner";
@@ -44,6 +47,24 @@ export const TonalSyncPlugin = () => {
   const [selectedKey, setSelectedKey] = useState("C");
   const [selectedScale, setSelectedScale] = useState("Major");
 
+  // Neural Engine controls
+  const [predictorEnabled, setPredictorEnabled] = useState(true);
+  const [contextAwareness, setContextAwareness] = useState(75);
+  const [continuousPitch, setContinuousPitch] = useState(false);
+  const [microtonalSensitivity, setMicrotonalSensitivity] = useState(50);
+  const [vibratoModeling, setVibratoModeling] = useState(true);
+  const [vibratoModelDepth, setVibratoModelDepth] = useState(50);
+  const [vibratoModelRate, setVibratoModelRate] = useState(5);
+  const [timbrePreservation, setTimbrePreservation] = useState(80);
+  const [formantLock, setFormantLock] = useState(true);
+
+  // Vocal Chain controls
+  const [harmonicSculptor, setHarmonicSculptor] = useState(false);
+  const [harmonicBoost, setHarmonicBoost] = useState(0);
+  const [mixAwareDampening, setMixAwareDampening] = useState(false);
+  const [dampeningAmount, setDampeningAmount] = useState(50);
+  const [latencyMode, setLatencyMode] = useState<"realtime" | "quality" | "offline">("realtime");
+
   // Audio processor hook
   const audioProcessor = useAudioProcessor({
     retuneSpeed,
@@ -72,32 +93,95 @@ export const TonalSyncPlugin = () => {
     }
   }, [aipeEnabled, audioProcessor.isActive, audioProcessor.inputLevel]);
 
-  const handleAudioToggle = async () => {
+  const handleDeviceSelect = useCallback((deviceId: string) => {
+    audioProcessor.selectDevice(deviceId);
+  }, [audioProcessor]);
+
+  const handleAudioStart = useCallback(async (deviceId: string) => {
     setAudioError(null);
+    setIsLoading(true);
     
-    if (audioProcessor.isActive) {
-      audioProcessor.stop();
-      toast.success("Audio stopped");
-    } else {
-      setIsLoading(true);
-      try {
-        await audioProcessor.start();
-        toast.success("Microphone active - sing into your mic!");
-      } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : "Failed to access microphone";
-        setAudioError(errorMessage);
-        toast.error(errorMessage);
-      } finally {
-        setIsLoading(false);
-      }
+    try {
+      await audioProcessor.start(deviceId);
+      toast.success("Microphone active - sing into your mic!");
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Failed to access microphone";
+      setAudioError(errorMessage);
+      toast.error(errorMessage);
+    } finally {
+      setIsLoading(false);
     }
-  };
+  }, [audioProcessor]);
+
+  const handleBypassToggle = useCallback(() => {
+    audioProcessor.setBypass(!audioProcessor.isBypassed);
+    toast.info(audioProcessor.isBypassed ? "Plugin Active" : "Plugin Bypassed");
+  }, [audioProcessor]);
+
+  const handleRequestDevices = useCallback(async () => {
+    try {
+      return await audioProcessor.requestPermissionAndEnumerate();
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Failed to enumerate devices";
+      setAudioError(errorMessage);
+      toast.error(errorMessage);
+      return [];
+    }
+  }, [audioProcessor]);
+
+  // Get current settings for preset manager
+  const getCurrentSettings = useCallback((): PluginPreset["settings"] => ({
+    retuneSpeed,
+    humanize,
+    flexTune,
+    formant,
+    vibrato,
+    vibratoRate,
+    mix,
+    selectedKey,
+    selectedScale,
+    realTimeMode,
+    aipeEnabled,
+    harmonicRetune,
+    harmonicFocus,
+    overtoneBias,
+    adaptiveMode,
+    vibratoIsolation,
+    slidePreservation,
+    intentSensitivity
+  }), [
+    retuneSpeed, humanize, flexTune, formant, vibrato, vibratoRate, mix,
+    selectedKey, selectedScale, realTimeMode, aipeEnabled, harmonicRetune,
+    harmonicFocus, overtoneBias, adaptiveMode, vibratoIsolation,
+    slidePreservation, intentSensitivity
+  ]);
+
+  const handleLoadPreset = useCallback((settings: PluginPreset["settings"]) => {
+    setRetuneSpeed(settings.retuneSpeed);
+    setHumanize(settings.humanize);
+    setFlexTune(settings.flexTune);
+    setFormant(settings.formant);
+    setVibrato(settings.vibrato);
+    setVibratoRate(settings.vibratoRate);
+    setMix(settings.mix);
+    setSelectedKey(settings.selectedKey);
+    setSelectedScale(settings.selectedScale);
+    setRealTimeMode(settings.realTimeMode);
+    setAipeEnabled(settings.aipeEnabled);
+    setHarmonicRetune(settings.harmonicRetune);
+    setHarmonicFocus(settings.harmonicFocus);
+    setOvertoneBias(settings.overtoneBias);
+    setAdaptiveMode(settings.adaptiveMode);
+    setVibratoIsolation(settings.vibratoIsolation);
+    setSlidePreservation(settings.slidePreservation);
+    setIntentSensitivity(settings.intentSensitivity);
+  }, []);
 
   return (
     <div className="min-h-screen bg-background p-4 md:p-8 flex items-center justify-center">
       <div
         className={cn(
-          "w-full max-w-6xl",
+          "w-full max-w-7xl",
           "bg-gradient-to-b from-card to-background",
           "rounded-2xl shadow-panel",
           "glow-border overflow-hidden"
@@ -109,7 +193,12 @@ export const TonalSyncPlugin = () => {
           {/* Audio Control Bar */}
           <AudioControlBar
             isActive={audioProcessor.isActive}
-            onToggle={handleAudioToggle}
+            isBypassed={audioProcessor.isBypassed}
+            onBypassToggle={handleBypassToggle}
+            onDeviceSelect={handleDeviceSelect}
+            onStart={handleAudioStart}
+            availableDevices={audioProcessor.availableDevices}
+            selectedDevice={audioProcessor.selectedDevice}
             detectedNote={audioProcessor.detectedNote}
             detectedPitch={audioProcessor.detectedPitch}
             correctedNote={audioProcessor.correctedNote}
@@ -117,10 +206,11 @@ export const TonalSyncPlugin = () => {
             pitchError={audioProcessor.pitchError}
             isLoading={isLoading}
             error={audioError}
+            onRequestDevices={handleRequestDevices}
           />
 
           {/* Main controls row */}
-          <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
+          <div className="grid grid-cols-1 lg:grid-cols-5 gap-4">
             {/* Left panel - Input/Key */}
             <div className="space-y-4">
               <ControlSection title="Input">
@@ -171,7 +261,11 @@ export const TonalSyncPlugin = () => {
             {/* Center panel - Graph and main knobs */}
             <div className="lg:col-span-2 space-y-4">
               <ControlSection title="Pitch Graph" glowing>
-                <PitchGraph className="h-48 md:h-56" />
+                <PitchGraph 
+                  className="h-48 md:h-56" 
+                  pitchHistory={audioProcessor.pitchHistory}
+                  isActive={audioProcessor.isActive}
+                />
               </ControlSection>
 
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -236,11 +330,11 @@ export const TonalSyncPlugin = () => {
                       "w-12 h-12 rounded-full",
                       "bg-muted border border-border",
                       "flex items-center justify-center",
-                      audioProcessor.outputLevel > 10 && "border-primary shadow-glow"
+                      audioProcessor.outputLevel > 10 && !audioProcessor.isBypassed && "border-primary shadow-glow"
                     )}>
                       <Volume2 className={cn(
                         "w-6 h-6",
-                        audioProcessor.outputLevel > 10 ? "text-primary" : "text-muted-foreground"
+                        audioProcessor.outputLevel > 10 && !audioProcessor.isBypassed ? "text-primary" : "text-muted-foreground"
                       )} />
                     </div>
                     <span className="text-[10px] text-muted-foreground">OUTPUT</span>
@@ -295,6 +389,44 @@ export const TonalSyncPlugin = () => {
                 confidence={Math.round(aipeConfidence)}
               />
             </div>
+
+            {/* Far right panel - Neural Engine & Vocal Chain */}
+            <div className="space-y-4">
+              <NeuralEnginePanel
+                isActive={aipeEnabled}
+                predictorEnabled={predictorEnabled}
+                onPredictorEnabledChange={setPredictorEnabled}
+                contextAwareness={contextAwareness}
+                onContextAwarenessChange={setContextAwareness}
+                continuousPitch={continuousPitch}
+                onContinuousPitchChange={setContinuousPitch}
+                microtonalSensitivity={microtonalSensitivity}
+                onMicrotonalSensitivityChange={setMicrotonalSensitivity}
+                vibratoModeling={vibratoModeling}
+                onVibratoModelingChange={setVibratoModeling}
+                vibratoDepth={vibratoModelDepth}
+                onVibratoDepthChange={setVibratoModelDepth}
+                vibratoRate={vibratoModelRate}
+                onVibratoRateChange={setVibratoModelRate}
+                timbrePreservation={timbrePreservation}
+                onTimbrePreservationChange={setTimbrePreservation}
+                formantLock={formantLock}
+                onFormantLockChange={setFormantLock}
+              />
+
+              <VocalChainPanel
+                harmonicSculptor={harmonicSculptor}
+                onHarmonicSculptorChange={setHarmonicSculptor}
+                harmonicBoost={harmonicBoost}
+                onHarmonicBoostChange={setHarmonicBoost}
+                mixAwareDampening={mixAwareDampening}
+                onMixAwareDampeningChange={setMixAwareDampening}
+                dampeningAmount={dampeningAmount}
+                onDampeningAmountChange={setDampeningAmount}
+                latencyMode={latencyMode}
+                onLatencyModeChange={setLatencyMode}
+              />
+            </div>
           </div>
 
           {/* Bottom controls */}
@@ -318,22 +450,12 @@ export const TonalSyncPlugin = () => {
               sublabel="Retune"
             />
 
-            {/* Preset buttons */}
-            <div className="flex gap-2 ml-4 pl-4 border-l border-border/50">
-              {["Init", "Natural", "Robot", "Custom"].map((preset) => (
-                <button
-                  key={preset}
-                  className={cn(
-                    "px-4 py-2 rounded-lg text-xs font-display uppercase",
-                    "border border-border bg-muted",
-                    "hover:border-primary/50 hover:bg-primary/10",
-                    "transition-all duration-200",
-                    preset === "Natural" && "border-primary bg-primary/20 text-primary"
-                  )}
-                >
-                  {preset}
-                </button>
-              ))}
+            {/* Preset Manager */}
+            <div className="ml-4 pl-4 border-l border-border/50">
+              <PresetManager
+                currentSettings={getCurrentSettings()}
+                onLoadPreset={handleLoadPreset}
+              />
             </div>
           </div>
         </div>
