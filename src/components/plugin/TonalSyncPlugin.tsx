@@ -118,6 +118,11 @@ export const TonalSyncPlugin = () => {
     toast.info(audioProcessor.isBypassed ? "Plugin Active" : "Plugin Bypassed");
   }, [audioProcessor]);
 
+  const handleAudioStop = useCallback(() => {
+    audioProcessor.stop();
+    toast.info("Audio stopped");
+  }, [audioProcessor]);
+
   const handleRequestDevices = useCallback(async () => {
     try {
       return await audioProcessor.requestPermissionAndEnumerate();
@@ -198,6 +203,7 @@ export const TonalSyncPlugin = () => {
             onBypassToggle={handleBypassToggle}
             onDeviceSelect={handleDeviceSelect}
             onStart={handleAudioStart}
+            onStop={handleAudioStop}
             availableDevices={audioProcessor.availableDevices}
             selectedDevice={audioProcessor.selectedDevice}
             detectedNote={audioProcessor.detectedNote}

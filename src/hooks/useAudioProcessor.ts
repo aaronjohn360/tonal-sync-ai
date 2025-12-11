@@ -68,12 +68,8 @@ export const useAudioProcessor = (options: UseAudioProcessorOptions) => {
   const audioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
-  const gainNodeRef = useRef<GainNode | null>(null);
-  const pitchShifterGainRef = useRef<GainNode | null>(null);
-  const oscillatorRef = useRef<OscillatorNode | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const animationFrameRef = useRef<number | null>(null);
-  const correctedPitchRef = useRef<number>(0);
   const isBypassedRef = useRef<boolean>(false);
   const pitchHistoryRef = useRef<{ input: number; corrected: number; time: number }[]>([]);
 
@@ -115,7 +111,7 @@ export const useAudioProcessor = (options: UseAudioProcessorOptions) => {
   }, [enumerateDevices]);
 
   // Select device
-  const selectDevice = useCallback((deviceId: string) => {
+  const selectDevice = useCallback((deviceId: string | null) => {
     setState(prev => ({ ...prev, selectedDevice: deviceId }));
   }, []);
 
@@ -123,18 +119,7 @@ export const useAudioProcessor = (options: UseAudioProcessorOptions) => {
   const setBypass = useCallback((bypassed: boolean) => {
     isBypassedRef.current = bypassed;
     setState(prev => ({ ...prev, isBypassed: bypassed }));
-    
-    // Mute/unmute the pitch shifted output
-    if (pitchShifterGainRef.current && gainNodeRef.current) {
-      if (bypassed) {
-        pitchShifterGainRef.current.gain.value = 0;
-        gainNodeRef.current.gain.value = options.mix / 100;
-      } else {
-        pitchShifterGainRef.current.gain.value = options.mix / 100;
-        gainNodeRef.current.gain.value = 0;
-      }
-    }
-  }, [options.mix]);
+  }, []);
 
   // Get valid notes for current key/scale
   const getScaleNotes = useCallback(() => {
@@ -214,20 +199,7 @@ export const useAudioProcessor = (options: UseAudioProcessorOptions) => {
     return Math.sqrt(sum / buffer.length);
   };
 
-  // Update pitch shifter oscillator
-  const updatePitchShifter = useCallback((targetFreq: number) => {
-    if (!audioContextRef.current || !oscillatorRef.current) return;
-    
-    if (targetFreq > 0 && !isBypassedRef.current) {
-      oscillatorRef.current.frequency.setTargetAtTime(
-        targetFreq,
-        audioContextRef.current.currentTime,
-        0.01 // Smooth transition
-      );
-    }
-  }, []);
-
-  // Main audio processing loop
+  // Main audio processing loop (visualization only - no audio output to prevent feedback)
   const processAudio = useCallback(() => {
     if (!analyserRef.current || !audioContextRef.current) return;
 
@@ -252,19 +224,14 @@ export const useAudioProcessor = (options: UseAudioProcessorOptions) => {
       const correctedRatio = 1 + (pitchRatio - 1) * correctionFactor;
       targetPitch = detectedPitch * correctedRatio;
       targetPitch *= 1 + (randomHumanize / 1200);
-      
-      // Update pitch shifter with corrected frequency
-      updatePitchShifter(targetPitch);
     }
-
-    correctedPitchRef.current = targetPitch;
 
     // Update pitch history for graph visualization
     const now = Date.now();
     pitchHistoryRef.current = [
       ...pitchHistoryRef.current.filter(p => now - p.time < 5000),
       { input: detectedPitch, corrected: targetPitch, time: now }
-    ].slice(-250); // Keep last 250 samples
+    ].slice(-250);
 
     const mixAmount = options.mix / 100;
     const outputLevel = isBypassedRef.current ? inputLevel : inputLevel * (0.8 + mixAmount * 0.2);
@@ -282,21 +249,25 @@ export const useAudioProcessor = (options: UseAudioProcessorOptions) => {
     }));
 
     animationFrameRef.current = requestAnimationFrame(processAudio);
-  }, [detectPitch, findNearestNote, options.retuneSpeed, options.humanize, options.mix, updatePitchShifter]);
+  }, [detectPitch, findNearestNote, options.retuneSpeed, options.humanize, options.mix]);
 
-  // Start audio processing with selected device
+  // Start audio processing with selected device (analysis only - no output)
   const start = useCallback(async (deviceId?: string) => {
     try {
       const targetDevice = deviceId || state.selectedDevice;
+      
+      if (!targetDevice) {
+        throw new Error("No device selected");
+      }
       
       audioContextRef.current = new AudioContext({ sampleRate: 44100 });
 
       streamRef.current = await navigator.mediaDevices.getUserMedia({
         audio: {
           deviceId: targetDevice ? { exact: targetDevice } : undefined,
-          echoCancellation: false,
-          noiseSuppression: false,
-          autoGainControl: false
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true
         }
       });
 
@@ -305,31 +276,9 @@ export const useAudioProcessor = (options: UseAudioProcessorOptions) => {
       analyserRef.current.fftSize = 2048;
       analyserRef.current.smoothingTimeConstant = 0.8;
 
-      // Create gain node for dry signal (used in bypass mode)
-      gainNodeRef.current = audioContextRef.current.createGain();
-      gainNodeRef.current.gain.value = 0; // Start with wet signal
-
-      // Create oscillator-based pitch shifter
-      oscillatorRef.current = audioContextRef.current.createOscillator();
-      oscillatorRef.current.type = 'sine';
-      oscillatorRef.current.frequency.value = 440;
-      
-      // Create gain for pitch shifted signal
-      pitchShifterGainRef.current = audioContextRef.current.createGain();
-      pitchShifterGainRef.current.gain.value = options.mix / 100;
-
-      // Connect: source -> analyser
+      // Connect source to analyser only (no output to prevent feedback)
       sourceRef.current.connect(analyserRef.current);
-      
-      // Dry path (bypass): analyser -> gain -> destination
-      analyserRef.current.connect(gainNodeRef.current);
-      gainNodeRef.current.connect(audioContextRef.current.destination);
-      
-      // Wet path (pitch shifted): oscillator -> pitchShifterGain -> destination
-      oscillatorRef.current.connect(pitchShifterGainRef.current);
-      pitchShifterGainRef.current.connect(audioContextRef.current.destination);
-      
-      oscillatorRef.current.start();
+      // NOTE: We intentionally do NOT connect to destination to prevent acoustic feedback
 
       isBypassedRef.current = false;
       pitchHistoryRef.current = [];
@@ -348,41 +297,33 @@ export const useAudioProcessor = (options: UseAudioProcessorOptions) => {
       console.error("Failed to start audio processing:", error);
       throw error;
     }
-  }, [options.mix, processAudio, state.selectedDevice]);
+  }, [processAudio, state.selectedDevice]);
 
   // Stop audio processing
   const stop = useCallback(() => {
     if (animationFrameRef.current) {
       cancelAnimationFrame(animationFrameRef.current);
-    }
-
-    if (oscillatorRef.current) {
-      oscillatorRef.current.stop();
-      oscillatorRef.current.disconnect();
+      animationFrameRef.current = null;
     }
 
     if (sourceRef.current) {
       sourceRef.current.disconnect();
+      sourceRef.current = null;
     }
 
     if (analyserRef.current) {
       analyserRef.current.disconnect();
-    }
-
-    if (gainNodeRef.current) {
-      gainNodeRef.current.disconnect();
-    }
-
-    if (pitchShifterGainRef.current) {
-      pitchShifterGainRef.current.disconnect();
+      analyserRef.current = null;
     }
 
     if (streamRef.current) {
       streamRef.current.getTracks().forEach(track => track.stop());
+      streamRef.current = null;
     }
 
     if (audioContextRef.current) {
       audioContextRef.current.close();
+      audioContextRef.current = null;
     }
 
     pitchHistoryRef.current = [];
@@ -401,13 +342,6 @@ export const useAudioProcessor = (options: UseAudioProcessorOptions) => {
       pitchHistory: []
     }));
   }, []);
-
-  // Update gains when mix changes
-  useEffect(() => {
-    if (pitchShifterGainRef.current && !isBypassedRef.current) {
-      pitchShifterGainRef.current.gain.value = options.mix / 100;
-    }
-  }, [options.mix]);
 
   // Cleanup on unmount
   useEffect(() => {

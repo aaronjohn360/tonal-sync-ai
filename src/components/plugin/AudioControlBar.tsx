@@ -1,11 +1,12 @@
 import { cn } from "@/lib/utils";
-import { Mic, MicOff, AlertCircle, Power, ChevronDown, Check } from "lucide-react";
-import { useState, useEffect } from "react";
+import { Mic, MicOff, AlertCircle, Power, ChevronDown, Check, CircleSlash } from "lucide-react";
+import { useState } from "react";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
+  DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
 import type { AudioDevice } from "@/hooks/useAudioProcessor";
 
@@ -13,8 +14,9 @@ interface AudioControlBarProps {
   isActive: boolean;
   isBypassed: boolean;
   onBypassToggle: () => void;
-  onDeviceSelect: (deviceId: string) => void;
+  onDeviceSelect: (deviceId: string | null) => void;
   onStart: (deviceId: string) => void;
+  onStop: () => void;
   availableDevices: AudioDevice[];
   selectedDevice: string | null;
   detectedNote: string;
@@ -33,6 +35,7 @@ export const AudioControlBar = ({
   onBypassToggle,
   onDeviceSelect,
   onStart,
+  onStop,
   availableDevices,
   selectedDevice,
   detectedNote,
@@ -63,7 +66,15 @@ export const AudioControlBar = ({
     setIsDropdownOpen(false);
   };
 
-  const selectedDeviceLabel = availableDevices.find(d => d.deviceId === selectedDevice)?.label || "Select Input";
+  const handleNoneClick = () => {
+    onStop();
+    onDeviceSelect(null);
+    setIsDropdownOpen(false);
+  };
+
+  const selectedDeviceLabel = selectedDevice 
+    ? (availableDevices.find(d => d.deviceId === selectedDevice)?.label || "Select Input")
+    : "None";
 
   return (
     <div className={cn(
@@ -107,6 +118,23 @@ export const AudioControlBar = ({
           align="start" 
           className="w-[280px] bg-card border-border z-50 animate-scale-in"
         >
+          {/* None option */}
+          <DropdownMenuItem
+            onClick={handleNoneClick}
+            className={cn(
+              "flex items-center gap-2 cursor-pointer",
+              !selectedDevice && "bg-primary/20"
+            )}
+          >
+            <CircleSlash className="w-4 h-4" />
+            <span className="flex-1">None (No Input)</span>
+            {!selectedDevice && (
+              <Check className="w-4 h-4 text-primary" />
+            )}
+          </DropdownMenuItem>
+          
+          <DropdownMenuSeparator />
+          
           {availableDevices.length === 0 ? (
             <DropdownMenuItem disabled className="text-muted-foreground">
               No devices found. Click to request access.
@@ -205,10 +233,7 @@ export const AudioControlBar = ({
               : "border-primary/50 text-primary bg-primary/10 hover:bg-primary/20 hover:shadow-glow"
           )}
         >
-          <Power className={cn(
-            "w-4 h-4 transition-transform duration-300",
-            !isBypassed && isActive && "animate-spin-slow"
-          )} />
+          <Power className="w-4 h-4" />
           <span>{isBypassed ? "Bypassed" : "Active"}</span>
         </button>
 
