@@ -69,6 +69,7 @@ export const useAudioProcessor = (options: UseAudioProcessorOptions) => {
   const analyserRef = useRef<AnalyserNode | null>(null);
   const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const gainNodeRef = useRef<GainNode | null>(null);
   const animationFrameRef = useRef<number | null>(null);
   const isBypassedRef = useRef<boolean>(false);
   const pitchHistoryRef = useRef<{ input: number; corrected: number; time: number }[]>([]);
@@ -115,9 +116,12 @@ export const useAudioProcessor = (options: UseAudioProcessorOptions) => {
     setState(prev => ({ ...prev, selectedDevice: deviceId }));
   }, []);
 
-  // Set bypass
+  // Set bypass - mutes audio output when bypassed
   const setBypass = useCallback((bypassed: boolean) => {
     isBypassedRef.current = bypassed;
+    if (gainNodeRef.current) {
+      gainNodeRef.current.gain.value = bypassed ? 0 : 1;
+    }
     setState(prev => ({ ...prev, isBypassed: bypassed }));
   }, []);
 
@@ -275,10 +279,15 @@ export const useAudioProcessor = (options: UseAudioProcessorOptions) => {
       analyserRef.current = audioContextRef.current.createAnalyser();
       analyserRef.current.fftSize = 2048;
       analyserRef.current.smoothingTimeConstant = 0.8;
+      
+      // Create gain node for monitoring with volume control
+      gainNodeRef.current = audioContextRef.current.createGain();
+      gainNodeRef.current.gain.value = 1; // Full volume for monitoring
 
-      // Connect source to analyser only (no output to prevent feedback)
+      // Connect: source -> analyser -> gain -> destination (speakers/headphones)
       sourceRef.current.connect(analyserRef.current);
-      // NOTE: We intentionally do NOT connect to destination to prevent acoustic feedback
+      analyserRef.current.connect(gainNodeRef.current);
+      gainNodeRef.current.connect(audioContextRef.current.destination);
 
       isBypassedRef.current = false;
       pitchHistoryRef.current = [];
@@ -314,6 +323,11 @@ export const useAudioProcessor = (options: UseAudioProcessorOptions) => {
     if (analyserRef.current) {
       analyserRef.current.disconnect();
       analyserRef.current = null;
+    }
+
+    if (gainNodeRef.current) {
+      gainNodeRef.current.disconnect();
+      gainNodeRef.current = null;
     }
 
     if (streamRef.current) {
