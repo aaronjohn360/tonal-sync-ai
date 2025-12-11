@@ -214,6 +214,12 @@ export const TonalSyncPlugin = () => {
             isLoading={isLoading}
             error={audioError}
             onRequestDevices={handleRequestDevices}
+            monitorVolume={audioProcessor.monitorVolume}
+            onMonitorVolumeChange={audioProcessor.setMonitorVolume}
+            isMonitoring={audioProcessor.isMonitoring}
+            onMonitoringToggle={audioProcessor.setMonitoring}
+            inputLevel={audioProcessor.inputLevel}
+            outputLevel={audioProcessor.outputLevel}
           />
 
           {/* Main controls row */}
