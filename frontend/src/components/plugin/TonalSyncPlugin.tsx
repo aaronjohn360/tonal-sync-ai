@@ -220,6 +220,9 @@ export const TonalSyncPlugin = () => {
             onMonitoringToggle={audioProcessor.setMonitoring}
             inputLevel={audioProcessor.inputLevel}
             outputLevel={audioProcessor.outputLevel}
+            correctionMode={audioProcessor.correctionMode}
+            onCorrectionModeChange={audioProcessor.setCorrectionMode}
+            isProcessing={audioProcessor.isProcessing}
           />
 
           {/* Main controls row */}
