@@ -38,6 +38,8 @@ interface AudioProcessorState {
   availableDevices: AudioDevice[];
   selectedDevice: string | null;
   pitchHistory: { input: number; corrected: number; time: number }[];
+  monitorVolume: number;
+  isMonitoring: boolean;
 }
 
 interface UseAudioProcessorOptions {
@@ -62,17 +64,59 @@ export const useAudioProcessor = (options: UseAudioProcessorOptions) => {
     pitchError: 0,
     availableDevices: [],
     selectedDevice: null,
-    pitchHistory: []
+    pitchHistory: [],
+    monitorVolume: 75,
+    isMonitoring: true
   });
 
   const audioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
-  const gainNodeRef = useRef<GainNode | null>(null);
+  
+  // Audio processing chain nodes
+  const inputGainRef = useRef<GainNode | null>(null);
+  const monitorGainRef = useRef<GainNode | null>(null);
+  const outputGainRef = useRef<GainNode | null>(null);
+  
+  // HQ Audio Processing Nodes
+  const compressorRef = useRef<DynamicsCompressorNode | null>(null);
+  const highPassRef = useRef<BiquadFilterNode | null>(null);
+  const lowPassRef = useRef<BiquadFilterNode | null>(null);
+  const presenceBoostRef = useRef<BiquadFilterNode | null>(null);
+  const airBoostRef = useRef<BiquadFilterNode | null>(null);
+  const warmthRef = useRef<BiquadFilterNode | null>(null);
+  const clarityBoostRef = useRef<BiquadFilterNode | null>(null);
+  
   const animationFrameRef = useRef<number | null>(null);
   const isBypassedRef = useRef<boolean>(false);
+  const isMonitoringRef = useRef<boolean>(true);
+  const monitorVolumeRef = useRef<number>(0.75);
   const pitchHistoryRef = useRef<{ input: number; corrected: number; time: number }[]>([]);
+
+  // Set monitor volume (0-100)
+  const setMonitorVolume = useCallback((volume: number) => {
+    const normalizedVolume = Math.max(0, Math.min(100, volume)) / 100;
+    monitorVolumeRef.current = normalizedVolume;
+    
+    if (monitorGainRef.current && isMonitoringRef.current && !isBypassedRef.current) {
+      monitorGainRef.current.gain.setTargetAtTime(normalizedVolume, audioContextRef.current?.currentTime || 0, 0.02);
+    }
+    
+    setState(prev => ({ ...prev, monitorVolume: volume }));
+  }, []);
+
+  // Toggle monitoring (hearing yourself)
+  const setMonitoring = useCallback((enabled: boolean) => {
+    isMonitoringRef.current = enabled;
+    
+    if (monitorGainRef.current) {
+      const volume = enabled && !isBypassedRef.current ? monitorVolumeRef.current : 0;
+      monitorGainRef.current.gain.setTargetAtTime(volume, audioContextRef.current?.currentTime || 0, 0.02);
+    }
+    
+    setState(prev => ({ ...prev, isMonitoring: enabled }));
+  }, []);
 
   // Enumerate audio devices
   const enumerateDevices = useCallback(async () => {
@@ -119,9 +163,12 @@ export const useAudioProcessor = (options: UseAudioProcessorOptions) => {
   // Set bypass - mutes audio output when bypassed
   const setBypass = useCallback((bypassed: boolean) => {
     isBypassedRef.current = bypassed;
-    if (gainNodeRef.current) {
-      gainNodeRef.current.gain.value = bypassed ? 0 : 1;
+    
+    if (monitorGainRef.current) {
+      const volume = !bypassed && isMonitoringRef.current ? monitorVolumeRef.current : 0;
+      monitorGainRef.current.gain.setTargetAtTime(volume, audioContextRef.current?.currentTime || 0, 0.02);
     }
+    
     setState(prev => ({ ...prev, isBypassed: bypassed }));
   }, []);
 
@@ -203,7 +250,7 @@ export const useAudioProcessor = (options: UseAudioProcessorOptions) => {
     return Math.sqrt(sum / buffer.length);
   };
 
-  // Main audio processing loop (visualization only - no audio output to prevent feedback)
+  // Main audio processing loop
   const processAudio = useCallback(() => {
     if (!analyserRef.current || !audioContextRef.current) return;
 
@@ -238,7 +285,7 @@ export const useAudioProcessor = (options: UseAudioProcessorOptions) => {
     ].slice(-250);
 
     const mixAmount = options.mix / 100;
-    const outputLevel = isBypassedRef.current ? inputLevel : inputLevel * (0.8 + mixAmount * 0.2);
+    const outputLevel = isBypassedRef.current ? 0 : inputLevel * (0.8 + mixAmount * 0.2);
 
     setState(prev => ({
       ...prev,
@@ -255,7 +302,70 @@ export const useAudioProcessor = (options: UseAudioProcessorOptions) => {
     animationFrameRef.current = requestAnimationFrame(processAudio);
   }, [detectPitch, findNearestNote, options.retuneSpeed, options.humanize, options.mix]);
 
-  // Start audio processing with selected device (analysis only - no output)
+  // Create HQ Audio Processing Chain
+  const createHQProcessingChain = useCallback((ctx: AudioContext) => {
+    // High-pass filter to remove rumble and muddiness (80Hz)
+    highPassRef.current = ctx.createBiquadFilter();
+    highPassRef.current.type = "highpass";
+    highPassRef.current.frequency.value = 80;
+    highPassRef.current.Q.value = 0.7;
+
+    // Low-pass filter to remove harsh frequencies (16kHz)
+    lowPassRef.current = ctx.createBiquadFilter();
+    lowPassRef.current.type = "lowpass";
+    lowPassRef.current.frequency.value = 16000;
+    lowPassRef.current.Q.value = 0.7;
+
+    // Warmth boost (200-400Hz range)
+    warmthRef.current = ctx.createBiquadFilter();
+    warmthRef.current.type = "peaking";
+    warmthRef.current.frequency.value = 280;
+    warmthRef.current.Q.value = 1.0;
+    warmthRef.current.gain.value = 2; // Subtle warmth
+
+    // Clarity boost (2-4kHz presence)
+    clarityBoostRef.current = ctx.createBiquadFilter();
+    clarityBoostRef.current.type = "peaking";
+    clarityBoostRef.current.frequency.value = 3000;
+    clarityBoostRef.current.Q.value = 1.2;
+    clarityBoostRef.current.gain.value = 3; // Crisp presence
+
+    // Presence boost (4-6kHz)
+    presenceBoostRef.current = ctx.createBiquadFilter();
+    presenceBoostRef.current.type = "peaking";
+    presenceBoostRef.current.frequency.value = 5000;
+    presenceBoostRef.current.Q.value = 1.0;
+    presenceBoostRef.current.gain.value = 2;
+
+    // Air/brightness boost (10-12kHz)
+    airBoostRef.current = ctx.createBiquadFilter();
+    airBoostRef.current.type = "highshelf";
+    airBoostRef.current.frequency.value = 10000;
+    airBoostRef.current.gain.value = 2; // Subtle air
+
+    // Compressor for consistent levels and punch
+    compressorRef.current = ctx.createDynamicsCompressor();
+    compressorRef.current.threshold.value = -24; // Start compressing at -24dB
+    compressorRef.current.knee.value = 6; // Soft knee for natural sound
+    compressorRef.current.ratio.value = 4; // 4:1 ratio
+    compressorRef.current.attack.value = 0.003; // 3ms attack for fast transients
+    compressorRef.current.release.value = 0.15; // 150ms release
+
+    // Chain the filters
+    highPassRef.current.connect(warmthRef.current);
+    warmthRef.current.connect(clarityBoostRef.current);
+    clarityBoostRef.current.connect(presenceBoostRef.current);
+    presenceBoostRef.current.connect(airBoostRef.current);
+    airBoostRef.current.connect(compressorRef.current);
+    compressorRef.current.connect(lowPassRef.current);
+
+    return {
+      input: highPassRef.current,
+      output: lowPassRef.current
+    };
+  }, []);
+
+  // Start audio processing with selected device
   const start = useCallback(async (deviceId?: string) => {
     try {
       const targetDevice = deviceId || state.selectedDevice;
@@ -264,38 +374,73 @@ export const useAudioProcessor = (options: UseAudioProcessorOptions) => {
         throw new Error("No device selected");
       }
       
-      audioContextRef.current = new AudioContext({ sampleRate: 44100 });
+      // Create audio context with high quality settings
+      audioContextRef.current = new AudioContext({ 
+        sampleRate: 48000, // Higher sample rate for better quality
+        latencyHint: 'interactive' // Low latency for monitoring
+      });
 
+      // Get user media with optimized settings for voice
       streamRef.current = await navigator.mediaDevices.getUserMedia({
         audio: {
           deviceId: targetDevice ? { exact: targetDevice } : undefined,
-          echoCancellation: true,
+          echoCancellation: false, // Disable for monitoring
           noiseSuppression: true,
-          autoGainControl: true
+          autoGainControl: false, // We'll handle gain ourselves
+          sampleRate: 48000,
+          channelCount: 1
         }
       });
 
-      sourceRef.current = audioContextRef.current.createMediaStreamSource(streamRef.current);
-      analyserRef.current = audioContextRef.current.createAnalyser();
+      const ctx = audioContextRef.current;
+
+      // Create source from microphone
+      sourceRef.current = ctx.createMediaStreamSource(streamRef.current);
+      
+      // Create analyser for pitch detection
+      analyserRef.current = ctx.createAnalyser();
       analyserRef.current.fftSize = 2048;
       analyserRef.current.smoothingTimeConstant = 0.8;
-      
-      // Create gain node for monitoring with volume control
-      gainNodeRef.current = audioContextRef.current.createGain();
-      gainNodeRef.current.gain.value = 1; // Full volume for monitoring
 
-      // Connect: source -> analyser -> gain -> destination (speakers/headphones)
-      sourceRef.current.connect(analyserRef.current);
-      analyserRef.current.connect(gainNodeRef.current);
-      gainNodeRef.current.connect(audioContextRef.current.destination);
+      // Input gain control
+      inputGainRef.current = ctx.createGain();
+      inputGainRef.current.gain.value = 1.0;
+
+      // Create HQ processing chain
+      const hqChain = createHQProcessingChain(ctx);
+
+      // Monitor gain (for hearing yourself)
+      monitorGainRef.current = ctx.createGain();
+      monitorGainRef.current.gain.value = monitorVolumeRef.current;
+
+      // Output gain
+      outputGainRef.current = ctx.createGain();
+      outputGainRef.current.gain.value = 1.0;
+
+      // Connect the audio graph:
+      // Source -> Input Gain -> Analyser (for pitch detection)
+      //                      -> HQ Chain -> Monitor Gain -> Output -> Speakers
+      
+      sourceRef.current.connect(inputGainRef.current);
+      
+      // Split for analysis and processing
+      inputGainRef.current.connect(analyserRef.current);
+      inputGainRef.current.connect(hqChain.input);
+      
+      // HQ processing to monitor
+      hqChain.output.connect(monitorGainRef.current);
+      monitorGainRef.current.connect(outputGainRef.current);
+      outputGainRef.current.connect(ctx.destination);
 
       isBypassedRef.current = false;
+      isMonitoringRef.current = true;
       pitchHistoryRef.current = [];
       
       setState(prev => ({ 
         ...prev, 
         isActive: true, 
         isBypassed: false,
+        isMonitoring: true,
         selectedDevice: targetDevice || prev.selectedDevice,
         pitchHistory: []
       }));
@@ -306,7 +451,7 @@ export const useAudioProcessor = (options: UseAudioProcessorOptions) => {
       console.error("Failed to start audio processing:", error);
       throw error;
     }
-  }, [processAudio, state.selectedDevice]);
+  }, [processAudio, state.selectedDevice, createHQProcessingChain]);
 
   // Stop audio processing
   const stop = useCallback(() => {
@@ -315,20 +460,32 @@ export const useAudioProcessor = (options: UseAudioProcessorOptions) => {
       animationFrameRef.current = null;
     }
 
-    if (sourceRef.current) {
-      sourceRef.current.disconnect();
-      sourceRef.current = null;
-    }
+    // Disconnect all nodes
+    const nodesToDisconnect = [
+      sourceRef,
+      analyserRef,
+      inputGainRef,
+      monitorGainRef,
+      outputGainRef,
+      compressorRef,
+      highPassRef,
+      lowPassRef,
+      presenceBoostRef,
+      airBoostRef,
+      warmthRef,
+      clarityBoostRef
+    ];
 
-    if (analyserRef.current) {
-      analyserRef.current.disconnect();
-      analyserRef.current = null;
-    }
-
-    if (gainNodeRef.current) {
-      gainNodeRef.current.disconnect();
-      gainNodeRef.current = null;
-    }
+    nodesToDisconnect.forEach(ref => {
+      if (ref.current) {
+        try {
+          ref.current.disconnect();
+        } catch (e) {
+          // Ignore disconnect errors
+        }
+        ref.current = null;
+      }
+    });
 
     if (streamRef.current) {
       streamRef.current.getTracks().forEach(track => track.stop());
@@ -346,6 +503,7 @@ export const useAudioProcessor = (options: UseAudioProcessorOptions) => {
       ...prev,
       isActive: false,
       isBypassed: false,
+      isMonitoring: false,
       inputLevel: 0,
       outputLevel: 0,
       detectedPitch: 0,
@@ -384,6 +542,8 @@ export const useAudioProcessor = (options: UseAudioProcessorOptions) => {
     enumerateDevices,
     requestPermissionAndEnumerate,
     selectDevice,
-    setBypass
+    setBypass,
+    setMonitorVolume,
+    setMonitoring
   };
 };
