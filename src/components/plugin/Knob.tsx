@@ -70,16 +70,30 @@ export const Knob = ({
     setIsDragging(false);
   }, []);
 
+  // Use document-level listeners to ensure mouseup is always caught
   useEffect(() => {
-    if (isDragging) {
-      window.addEventListener("mousemove", handleMouseMove);
-      window.addEventListener("mouseup", handleMouseUp);
-    }
-    return () => {
-      window.removeEventListener("mousemove", handleMouseMove);
-      window.removeEventListener("mouseup", handleMouseUp);
+    const handleDocumentMouseMove = (e: MouseEvent) => {
+      if (!isDragging) return;
+      handleMouseMove(e);
     };
-  }, [isDragging, handleMouseMove, handleMouseUp]);
+
+    const handleDocumentMouseUp = () => {
+      if (isDragging) {
+        setIsDragging(false);
+      }
+    };
+
+    // Always add listeners to document for reliable tracking
+    document.addEventListener("mousemove", handleDocumentMouseMove);
+    document.addEventListener("mouseup", handleDocumentMouseUp);
+    document.addEventListener("mouseleave", handleDocumentMouseUp);
+
+    return () => {
+      document.removeEventListener("mousemove", handleDocumentMouseMove);
+      document.removeEventListener("mouseup", handleDocumentMouseUp);
+      document.removeEventListener("mouseleave", handleDocumentMouseUp);
+    };
+  }, [isDragging, handleMouseMove]);
 
   return (
     <div className={cn("flex flex-col items-center gap-2 group", className)}>
