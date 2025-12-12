@@ -24,6 +24,7 @@ export const Knob = ({
   size = "md",
   showValue = true,
   className,
+  color = "green",
 }: KnobProps) => {
   const [isDragging, setIsDragging] = useState(false);
   const knobRef = useRef<HTMLDivElement>(null);
