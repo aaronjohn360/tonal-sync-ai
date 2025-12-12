@@ -6,11 +6,12 @@ interface KnobProps {
   min?: number;
   max?: number;
   onChange?: (value: number) => void;
-  label: string;
+  label?: string;
   unit?: string;
   size?: "sm" | "md" | "lg";
   showValue?: boolean;
   className?: string;
+  color?: "green" | "orange" | "blue";
 }
 
 export const Knob = ({
