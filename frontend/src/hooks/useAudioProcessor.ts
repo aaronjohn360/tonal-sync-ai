@@ -1,8 +1,8 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 
 // ============================================
-// TONAL SYNC PRO - REAL-TIME PITCH CORRECTION
-// Fixed Audio Monitoring + Phase Vocoder
+// TONAL SYNC PRO - CLEAN AUDIO ENGINE
+// Fixed pitch shifting without distortion
 // ============================================
 
 const NOTE_FREQUENCIES: { [key: string]: number } = {
@@ -50,6 +50,7 @@ interface AudioProcessorState {
   isProcessing: boolean;
   currentPitchShift: number;
   formantShift: number;
+  activeNotes: string[];
 }
 
 interface UseAudioProcessorOptions {
@@ -62,42 +63,52 @@ interface UseAudioProcessorOptions {
 }
 
 // ============================================
-// REAL-TIME PITCH SHIFTER - 0ms LATENCY
-// Ultra-smooth transparent pitch correction
+// CLEAN PITCH SHIFTER - NO DISTORTION
+// Uses proper WSOLA-style granular synthesis
 // ============================================
-const pitchShifterCode = `
-class PitchShifterProcessor extends AudioWorkletProcessor {
+const cleanPitchShifterCode = `
+class CleanPitchShifterProcessor extends AudioWorkletProcessor {
   constructor() {
     super();
     
     // Parameters
     this.pitchRatio = 1.0;
-    this.targetPitchRatio = 1.0;
+    this.targetRatio = 1.0;
     this.wetMix = 1.0;
-    this.smoothing = 0.95; // Ultra-smooth transitions
     
-    // Minimal buffer for 0-latency
-    this.bufferSize = 256;
-    this.inputRing = new Float32Array(this.bufferSize * 2);
-    this.inputPos = 0;
-    this.readPos = 0;
+    // Granular synthesis settings for clean sound
+    this.grainSize = 1024;  // Larger grain for cleaner sound
+    this.hopSize = 256;     // 75% overlap
+    this.numGrains = 4;     // Number of overlapping grains
     
-    // Crossfade for click-free pitch changes
-    this.crossfadeLength = 64;
-    this.prevSample = 0;
+    // Buffers
+    this.inputBuffer = new Float32Array(this.grainSize * 4);
+    this.inputWritePos = 0;
+    this.grainReadPos = new Float32Array(this.numGrains);
+    this.grainPhase = new Float32Array(this.numGrains);
     
-    // Formant filter state
-    this.formantState = [0, 0, 0, 0];
+    // Initialize grain positions
+    for (let i = 0; i < this.numGrains; i++) {
+      this.grainPhase[i] = i / this.numGrains;
+      this.grainReadPos[i] = 0;
+    }
+    
+    // Hanning window for smooth grains
+    this.window = new Float32Array(this.grainSize);
+    for (let i = 0; i < this.grainSize; i++) {
+      this.window[i] = 0.5 * (1 - Math.cos(2 * Math.PI * i / this.grainSize));
+    }
+    
+    // Output smoothing
+    this.lastOutput = 0;
+    this.smoothingCoef = 0.995;
     
     this.port.onmessage = (e) => {
       if (e.data.pitchRatio !== undefined) {
-        this.targetPitchRatio = Math.max(0.5, Math.min(2.0, e.data.pitchRatio));
+        this.targetRatio = Math.max(0.5, Math.min(2.0, e.data.pitchRatio));
       }
       if (e.data.wetMix !== undefined) {
-        this.wetMix = e.data.wetMix;
-      }
-      if (e.data.smoothing !== undefined) {
-        this.smoothing = e.data.smoothing;
+        this.wetMix = Math.max(0, Math.min(1, e.data.wetMix));
       }
     };
   }
@@ -110,74 +121,90 @@ class PitchShifterProcessor extends AudioWorkletProcessor {
     
     const inChannel = input[0];
     const blockSize = inChannel.length;
-    const bufSize = this.bufferSize * 2;
+    const bufSize = this.inputBuffer.length;
     
-    // Ultra-smooth pitch ratio interpolation
-    const smoothFactor = Math.pow(this.smoothing, blockSize / 128);
-    this.pitchRatio += (this.targetPitchRatio - this.pitchRatio) * (1 - smoothFactor);
+    // Smooth pitch ratio changes
+    this.pitchRatio += (this.targetRatio - this.pitchRatio) * 0.01;
     
     for (let i = 0; i < blockSize; i++) {
-      const sample = inChannel[i];
+      const inputSample = inChannel[i];
       
-      // Write to ring buffer
-      this.inputRing[this.inputPos] = sample;
-      this.inputRing[this.inputPos + this.bufferSize] = sample;
+      // Write to circular input buffer
+      this.inputBuffer[this.inputWritePos] = inputSample;
+      this.inputWritePos = (this.inputWritePos + 1) % bufSize;
       
-      // Read with pitch shift (cubic interpolation for smoothness)
-      const readIdx = this.readPos;
-      const idx0 = Math.floor(readIdx) % bufSize;
-      const idx1 = (idx0 + 1) % bufSize;
-      const idx2 = (idx0 + 2) % bufSize;
-      const idxM1 = (idx0 - 1 + bufSize) % bufSize;
+      // Granular synthesis output
+      let outputSample = 0;
+      let totalWeight = 0;
       
-      const frac = readIdx - Math.floor(readIdx);
-      
-      // Cubic interpolation for ultra-smooth output
-      const s0 = this.inputRing[idxM1];
-      const s1 = this.inputRing[idx0];
-      const s2 = this.inputRing[idx1];
-      const s3 = this.inputRing[idx2];
-      
-      const a0 = s3 - s2 - s0 + s1;
-      const a1 = s0 - s1 - a0;
-      const a2 = s2 - s0;
-      const a3 = s1;
-      
-      let processed = a0 * frac * frac * frac + a1 * frac * frac + a2 * frac + a3;
-      
-      // Simple formant preservation filter
-      if (this.pitchRatio !== 1.0) {
-        const alpha = 0.3;
-        const filtered = alpha * processed + (1 - alpha) * this.formantState[0];
-        this.formantState[0] = filtered;
-        processed = filtered;
+      for (let g = 0; g < this.numGrains; g++) {
+        // Get grain phase (0 to 1)
+        const phase = this.grainPhase[g];
+        const grainIndex = Math.floor(phase * this.grainSize);
+        
+        // Window value for this grain position
+        const windowVal = this.window[grainIndex];
+        
+        // Read position in input buffer
+        const readPos = this.grainReadPos[g];
+        const readIdx = Math.floor(readPos) % bufSize;
+        const readFrac = readPos - Math.floor(readPos);
+        
+        // Linear interpolation for smooth reading
+        const s0 = this.inputBuffer[readIdx];
+        const s1 = this.inputBuffer[(readIdx + 1) % bufSize];
+        const sample = s0 + readFrac * (s1 - s0);
+        
+        // Add windowed sample
+        outputSample += sample * windowVal;
+        totalWeight += windowVal;
+        
+        // Advance grain phase
+        this.grainPhase[g] += 1.0 / this.grainSize;
+        
+        // When grain completes, reset it
+        if (this.grainPhase[g] >= 1.0) {
+          this.grainPhase[g] = 0;
+          // Set new read position based on current write position
+          this.grainReadPos[g] = this.inputWritePos - this.grainSize;
+          if (this.grainReadPos[g] < 0) this.grainReadPos[g] += bufSize;
+        }
+        
+        // Advance read position based on pitch ratio
+        this.grainReadPos[g] += this.pitchRatio;
+        if (this.grainReadPos[g] >= bufSize) this.grainReadPos[g] -= bufSize;
+        if (this.grainReadPos[g] < 0) this.grainReadPos[g] += bufSize;
       }
       
-      // Soft crossfade to prevent clicks
-      const crossfade = Math.min(1, i / this.crossfadeLength);
-      processed = processed * crossfade + this.prevSample * (1 - crossfade);
-      if (i === blockSize - 1) this.prevSample = processed;
+      // Normalize output
+      if (totalWeight > 0) {
+        outputSample /= totalWeight;
+      }
+      
+      // DC blocking filter
+      const dcBlocked = outputSample - this.lastOutput * 0.995;
+      this.lastOutput = outputSample;
+      
+      // Soft clipping to prevent distortion
+      let finalSample = dcBlocked;
+      if (Math.abs(finalSample) > 0.95) {
+        finalSample = Math.sign(finalSample) * (0.95 + 0.05 * Math.tanh((Math.abs(finalSample) - 0.95) * 20));
+      }
       
       // Mix wet/dry
-      const out = processed * this.wetMix + sample * (1.0 - this.wetMix);
+      const mixed = finalSample * this.wetMix + inputSample * (1.0 - this.wetMix);
       
       // Output to all channels (stereo)
       for (let ch = 0; ch < output.length; ch++) {
-        output[ch][i] = out;
+        output[ch][i] = mixed;
       }
-      
-      // Advance positions
-      this.inputPos = (this.inputPos + 1) % this.bufferSize;
-      this.readPos += this.pitchRatio;
-      if (this.readPos >= bufSize) this.readPos -= bufSize;
-      if (this.readPos < 0) this.readPos += bufSize;
     }
     
     return true;
   }
 }
 
-registerProcessor('pitch-shifter', PitchShifterProcessor);
+registerProcessor('clean-pitch-shifter', CleanPitchShifterProcessor);
 `;
 
 export const useAudioProcessor = (options: UseAudioProcessorOptions) => {
@@ -200,23 +227,24 @@ export const useAudioProcessor = (options: UseAudioProcessorOptions) => {
     correctionMode: "modern",
     isProcessing: false,
     currentPitchShift: 1.0,
-    formantShift: 0
+    formantShift: 0,
+    activeNotes: []
   });
 
   const audioContextRef = useRef<AudioContext | null>(null);
-  const analyserRef = useRef<AnalyserNode | null>(null);
+  const analyserInputRef = useRef<AnalyserNode | null>(null);
+  const analyserOutputRef = useRef<AnalyserNode | null>(null);
   const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   
-  // Main audio nodes
+  // Audio nodes
   const inputGainRef = useRef<GainNode | null>(null);
   const outputGainRef = useRef<GainNode | null>(null);
   const pitchShifterRef = useRef<AudioWorkletNode | null>(null);
   
-  // EQ nodes
+  // EQ nodes for clean sound
   const highPassRef = useRef<BiquadFilterNode | null>(null);
-  const lowShelfRef = useRef<BiquadFilterNode | null>(null);
-  const presenceRef = useRef<BiquadFilterNode | null>(null);
+  const lowPassRef = useRef<BiquadFilterNode | null>(null);
   const compressorRef = useRef<DynamicsCompressorNode | null>(null);
   
   const animationFrameRef = useRef<number | null>(null);
@@ -226,6 +254,7 @@ export const useAudioProcessor = (options: UseAudioProcessorOptions) => {
   const pitchHistoryRef = useRef<{ input: number; corrected: number; time: number }[]>([]);
   const correctionModeRef = useRef<CorrectionMode>("modern");
   const currentPitchRatioRef = useRef<number>(1.0);
+  const activeNotesRef = useRef<string[]>([]);
 
   const setCorrectionMode = useCallback((mode: CorrectionMode) => {
     correctionModeRef.current = mode;
@@ -240,7 +269,7 @@ export const useAudioProcessor = (options: UseAudioProcessorOptions) => {
       outputGainRef.current.gain.setTargetAtTime(
         isMonitoringRef.current && !isBypassedRef.current ? normalized : 0,
         audioContextRef.current.currentTime,
-        0.02
+        0.05
       );
     }
     
@@ -254,7 +283,7 @@ export const useAudioProcessor = (options: UseAudioProcessorOptions) => {
       outputGainRef.current.gain.setTargetAtTime(
         enabled && !isBypassedRef.current ? monitorVolumeRef.current : 0,
         audioContextRef.current.currentTime,
-        0.02
+        0.05
       );
     }
     
@@ -306,9 +335,10 @@ export const useAudioProcessor = (options: UseAudioProcessorOptions) => {
     
     if (outputGainRef.current && audioContextRef.current) {
       outputGainRef.current.gain.setTargetAtTime(
-        !bypassed && isMonitoringRef.current ? monitorVolumeRef.current : 0,
+        !bypassed && isMonitoringRef.current ? monitorVolumeRef.current : 
+        bypassed && isMonitoringRef.current ? monitorVolumeRef.current : 0,
         audioContextRef.current.currentTime,
-        0.02
+        0.05
       );
     }
     
@@ -350,6 +380,7 @@ export const useAudioProcessor = (options: UseAudioProcessorOptions) => {
     return { ...nearest, pitchRatio: nearest.freq / freq };
   }, [getScaleFrequencies]);
 
+  // YIN pitch detection
   const detectPitch = useCallback((buffer: Float32Array, sampleRate: number): number => {
     const size = buffer.length;
     const halfSize = Math.floor(size / 2);
@@ -388,22 +419,41 @@ export const useAudioProcessor = (options: UseAudioProcessorOptions) => {
     return sampleRate / tau;
   }, []);
 
+  // Calculate RMS level
+  const calcRMS = (buf: Float32Array): number => {
+    let sum = 0;
+    for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
+    return Math.sqrt(sum / buf.length);
+  };
+
+  // Main processing loop
   const processAudio = useCallback(() => {
-    if (!analyserRef.current || !audioContextRef.current) return;
+    if (!analyserInputRef.current || !audioContextRef.current) return;
     
-    const bufLen = analyserRef.current.fftSize;
+    const bufLen = analyserInputRef.current.fftSize;
     const buffer = new Float32Array(bufLen);
-    analyserRef.current.getFloatTimeDomainData(buffer);
+    analyserInputRef.current.getFloatTimeDomainData(buffer);
     
-    // Calculate RMS
-    let rms = 0;
-    for (let i = 0; i < bufLen; i++) rms += buffer[i] * buffer[i];
-    rms = Math.sqrt(rms / bufLen);
-    const inputLevel = Math.min(100, rms * 400);
+    // Input level (real-time)
+    const rms = calcRMS(buffer);
+    const inputLevel = Math.min(100, rms * 500);
     
-    // Detect pitch
+    // Output level (real-time)
+    let outputLevel = 0;
+    if (analyserOutputRef.current) {
+      const outBuf = new Float32Array(analyserOutputRef.current.fftSize);
+      analyserOutputRef.current.getFloatTimeDomainData(outBuf);
+      outputLevel = Math.min(100, calcRMS(outBuf) * 500);
+    }
+    
+    // Pitch detection
     const detectedPitch = detectPitch(buffer, audioContextRef.current.sampleRate);
     const { note, freq: targetFreq, cents, octave, pitchRatio } = findNearestNote(detectedPitch);
+    
+    // Track active notes for piano display
+    if (note !== "-" && note !== activeNotesRef.current[0]) {
+      activeNotesRef.current = [note, ...activeNotesRef.current.slice(0, 4)];
+    }
     
     let finalRatio = 1.0;
     let correctedPitch = detectedPitch;
@@ -414,30 +464,30 @@ export const useAudioProcessor = (options: UseAudioProcessorOptions) => {
       
       if (isClassic) {
         // Classic: aggressive correction
-        const strength = 1.0 - (retuneNorm * 0.15);
+        const strength = 1.0 - (retuneNorm * 0.1);
         finalRatio = 1.0 + (pitchRatio - 1.0) * strength;
         
         // Fast smoothing
-        const smooth = 0.15 + retuneNorm * 0.15;
+        const smooth = 0.1 + retuneNorm * 0.1;
         currentPitchRatioRef.current += (finalRatio - currentPitchRatioRef.current) * (1 - smooth);
       } else {
         // Modern: natural correction with flex-tune
         const threshold = 10 + retuneNorm * 40;
         
         if (Math.abs(cents) > threshold) {
-          const strength = 1.0 - (retuneNorm * 0.6);
+          const strength = 1.0 - (retuneNorm * 0.5);
           finalRatio = 1.0 + (pitchRatio - 1.0) * strength;
         } else {
           finalRatio = 1.0;
         }
         
-        const smooth = 0.5 + retuneNorm * 0.3;
+        const smooth = 0.4 + retuneNorm * 0.3;
         currentPitchRatioRef.current += (finalRatio - currentPitchRatioRef.current) * (1 - smooth);
       }
       
       // Humanize
       const humanize = options.humanize / 100;
-      currentPitchRatioRef.current += (Math.random() - 0.5) * 0.008 * humanize;
+      currentPitchRatioRef.current += (Math.random() - 0.5) * 0.005 * humanize;
       
       correctedPitch = detectedPitch * currentPitchRatioRef.current;
       
@@ -445,10 +495,14 @@ export const useAudioProcessor = (options: UseAudioProcessorOptions) => {
       if (pitchShifterRef.current) {
         pitchShifterRef.current.port.postMessage({
           pitchRatio: currentPitchRatioRef.current,
-          wetMix: options.mix / 100,
-          formantPreserve: true
+          wetMix: options.mix / 100
         });
       }
+    } else if (pitchShifterRef.current) {
+      pitchShifterRef.current.port.postMessage({
+        pitchRatio: 1.0,
+        wetMix: isBypassedRef.current ? 0.0 : options.mix / 100
+      });
     }
     
     // Update history
@@ -465,7 +519,7 @@ export const useAudioProcessor = (options: UseAudioProcessorOptions) => {
     setState(prev => ({
       ...prev,
       inputLevel,
-      outputLevel: isBypassedRef.current ? 0 : inputLevel * 0.9,
+      outputLevel: isBypassedRef.current ? inputLevel : outputLevel,
       detectedPitch: Math.round(detectedPitch * 10) / 10,
       detectedNote: note || "-",
       detectedOctave: octave,
@@ -474,19 +528,20 @@ export const useAudioProcessor = (options: UseAudioProcessorOptions) => {
       pitchError: cents,
       pitchHistory: pitchHistoryRef.current,
       isProcessing: detectedPitch > 0,
-      currentPitchShift: Math.round(currentPitchRatioRef.current * 1000) / 1000
+      currentPitchShift: Math.round(currentPitchRatioRef.current * 1000) / 1000,
+      activeNotes: [...activeNotesRef.current]
     }));
     
     animationFrameRef.current = requestAnimationFrame(processAudio);
   }, [detectPitch, findNearestNote, options]);
 
   const initPitchShifter = useCallback(async (ctx: AudioContext) => {
-    const blob = new Blob([pitchShifterCode], { type: 'application/javascript' });
+    const blob = new Blob([cleanPitchShifterCode], { type: 'application/javascript' });
     const url = URL.createObjectURL(blob);
     await ctx.audioWorklet.addModule(url);
     URL.revokeObjectURL(url);
     
-    return new AudioWorkletNode(ctx, 'pitch-shifter', {
+    return new AudioWorkletNode(ctx, 'clean-pitch-shifter', {
       numberOfInputs: 1,
       numberOfOutputs: 1,
       outputChannelCount: [2]
@@ -498,7 +553,7 @@ export const useAudioProcessor = (options: UseAudioProcessorOptions) => {
       const device = deviceId || state.selectedDevice;
       if (!device) throw new Error("No device selected");
       
-      // Create context
+      // Create audio context
       audioContextRef.current = new AudioContext({
         sampleRate: 48000,
         latencyHint: 'interactive'
@@ -519,58 +574,59 @@ export const useAudioProcessor = (options: UseAudioProcessorOptions) => {
       // Create nodes
       sourceRef.current = ctx.createMediaStreamSource(streamRef.current);
       
-      analyserRef.current = ctx.createAnalyser();
-      analyserRef.current.fftSize = 4096;
+      // Input analyser
+      analyserInputRef.current = ctx.createAnalyser();
+      analyserInputRef.current.fftSize = 4096;
+      analyserInputRef.current.smoothingTimeConstant = 0.5;
+      
+      // Output analyser
+      analyserOutputRef.current = ctx.createAnalyser();
+      analyserOutputRef.current.fftSize = 2048;
+      analyserOutputRef.current.smoothingTimeConstant = 0.5;
       
       inputGainRef.current = ctx.createGain();
       inputGainRef.current.gain.value = 1.0;
       
-      // EQ Chain
+      // High-pass filter to remove rumble
       highPassRef.current = ctx.createBiquadFilter();
       highPassRef.current.type = "highpass";
       highPassRef.current.frequency.value = 80;
+      highPassRef.current.Q.value = 0.7;
       
-      lowShelfRef.current = ctx.createBiquadFilter();
-      lowShelfRef.current.type = "lowshelf";
-      lowShelfRef.current.frequency.value = 200;
-      lowShelfRef.current.gain.value = 2;
+      // Low-pass to prevent aliasing
+      lowPassRef.current = ctx.createBiquadFilter();
+      lowPassRef.current.type = "lowpass";
+      lowPassRef.current.frequency.value = 12000;
+      lowPassRef.current.Q.value = 0.7;
       
-      presenceRef.current = ctx.createBiquadFilter();
-      presenceRef.current.type = "peaking";
-      presenceRef.current.frequency.value = 3500;
-      presenceRef.current.Q.value = 1.2;
-      presenceRef.current.gain.value = 3;
-      
+      // Gentle compression
       compressorRef.current = ctx.createDynamicsCompressor();
-      compressorRef.current.threshold.value = -18;
-      compressorRef.current.ratio.value = 4;
-      compressorRef.current.attack.value = 0.003;
-      compressorRef.current.release.value = 0.1;
+      compressorRef.current.threshold.value = -12;
+      compressorRef.current.knee.value = 10;
+      compressorRef.current.ratio.value = 3;
+      compressorRef.current.attack.value = 0.01;
+      compressorRef.current.release.value = 0.2;
       
       // Pitch shifter
       const pitchShifter = await initPitchShifter(ctx);
       pitchShifterRef.current = pitchShifter;
       
-      // Output gain (monitor volume)
+      // Output gain
       outputGainRef.current = ctx.createGain();
       outputGainRef.current.gain.value = monitorVolumeRef.current;
       
-      // ===== CONNECT AUDIO GRAPH =====
-      // Source -> Input Gain -> Analyser (for pitch detection)
-      //                      -> EQ -> Pitch Shifter -> Compressor -> Output Gain -> Speakers
+      // Connect graph:
+      // Source -> Input Gain -> High-pass -> Pitch Shifter -> Low-pass -> Compressor -> Output Analyser -> Output Gain -> Speakers
+      //                      -> Input Analyser (parallel for pitch detection)
       
       sourceRef.current.connect(inputGainRef.current);
-      
-      // Branch 1: Analysis
-      inputGainRef.current.connect(analyserRef.current);
-      
-      // Branch 2: Processing chain -> Output
+      inputGainRef.current.connect(analyserInputRef.current);  // For pitch detection
       inputGainRef.current.connect(highPassRef.current);
-      highPassRef.current.connect(lowShelfRef.current);
-      lowShelfRef.current.connect(presenceRef.current);
-      presenceRef.current.connect(pitchShifter);
-      pitchShifter.connect(compressorRef.current);
-      compressorRef.current.connect(outputGainRef.current);
+      highPassRef.current.connect(pitchShifter);
+      pitchShifter.connect(lowPassRef.current);
+      lowPassRef.current.connect(compressorRef.current);
+      compressorRef.current.connect(analyserOutputRef.current);
+      analyserOutputRef.current.connect(outputGainRef.current);
       outputGainRef.current.connect(ctx.destination);
       
       // Reset state
@@ -578,6 +634,7 @@ export const useAudioProcessor = (options: UseAudioProcessorOptions) => {
       isMonitoringRef.current = true;
       pitchHistoryRef.current = [];
       currentPitchRatioRef.current = 1.0;
+      activeNotesRef.current = [];
       
       setState(prev => ({
         ...prev,
@@ -585,7 +642,8 @@ export const useAudioProcessor = (options: UseAudioProcessorOptions) => {
         isBypassed: false,
         isMonitoring: true,
         selectedDevice: device,
-        pitchHistory: []
+        pitchHistory: [],
+        activeNotes: []
       }));
       
       // Start processing loop
@@ -603,7 +661,7 @@ export const useAudioProcessor = (options: UseAudioProcessorOptions) => {
       animationFrameRef.current = null;
     }
     
-    [sourceRef, analyserRef, inputGainRef, outputGainRef, highPassRef, lowShelfRef, presenceRef, compressorRef].forEach(ref => {
+    [sourceRef, analyserInputRef, analyserOutputRef, inputGainRef, outputGainRef, highPassRef, lowPassRef, compressorRef].forEach(ref => {
       if (ref.current) {
         try { ref.current.disconnect(); } catch (e) {}
         ref.current = null;
@@ -638,7 +696,8 @@ export const useAudioProcessor = (options: UseAudioProcessorOptions) => {
       correctedNote: "-",
       pitchError: 0,
       pitchHistory: [],
-      isProcessing: false
+      isProcessing: false,
+      activeNotes: []
     }));
   }, []);
 
