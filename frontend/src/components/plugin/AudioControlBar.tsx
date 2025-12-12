@@ -37,6 +37,7 @@ interface AudioControlBarProps {
   correctionMode?: CorrectionMode;
   onCorrectionModeChange?: (mode: CorrectionMode) => void;
   isProcessing?: boolean;
+  currentPitchShift?: number; // Debug: shows current pitch shift ratio
 }
 
 // Pulsating effect component
