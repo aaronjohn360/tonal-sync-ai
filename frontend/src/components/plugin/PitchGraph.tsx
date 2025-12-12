@@ -15,15 +15,6 @@ const NOTE_FREQUENCIES: { [key: string]: number } = {
 
 const NOTES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
 
-// Convert frequency to note position (0-1 range within display)
-const freqToNotePosition = (freq: number, minFreq: number, maxFreq: number): number => {
-  if (freq <= 0) return 0.5;
-  const logMin = Math.log2(minFreq);
-  const logMax = Math.log2(maxFreq);
-  const logFreq = Math.log2(freq);
-  return 1 - (logFreq - logMin) / (logMax - logMin);
-};
-
 // Get note name from frequency
 const getNoteName = (freq: number): string => {
   if (freq <= 0) return "-";
@@ -53,6 +44,7 @@ export const PitchGraph = ({ className, pitchHistory = [], isActive = false }: P
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const animationRef = useRef<number>();
   const timeRef = useRef(0);
+  const centerFreqRef = useRef(300); // Dynamic center frequency
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -70,175 +62,257 @@ export const PitchGraph = ({ className, pitchHistory = [], isActive = false }: P
     resize();
     window.addEventListener("resize", resize);
 
-    // Frequency range for display (C3 to C6)
-    const minFreq = 130.81; // C3
-    const maxFreq = 1046.5; // C6
+    // Convert frequency to centered Y position
+    // This centers the current pitch in the middle of the graph
+    const freqToY = (freq: number, centerFreq: number, height: number, range: number = 2): number => {
+      if (freq <= 0 || centerFreq <= 0) return height / 2;
+      
+      // Calculate semitones from center
+      const semitones = 12 * Math.log2(freq / centerFreq);
+      
+      // Map semitones to Y position (center = middle, +/- range octaves visible)
+      const semitonesRange = range * 12; // Total semitones visible
+      const normalizedPosition = semitones / semitonesRange;
+      
+      // Clamp and invert (higher pitch = lower Y)
+      return Math.max(0, Math.min(height, height / 2 - normalizedPosition * height / 2));
+    };
 
-    // Generate note lines for display
-    const noteLines: { note: string; freq: number }[] = [];
-    for (let octave = 3; octave <= 5; octave++) {
-      for (const note of ["C", "E", "G"]) {
-        const baseFreq = NOTE_FREQUENCIES[note];
-        const freq = baseFreq * Math.pow(2, octave - 4);
-        if (freq >= minFreq && freq <= maxFreq) {
-          noteLines.push({ note: `${note}${octave}`, freq });
+    // Get note lines relative to center frequency
+    const getNoteLines = (centerFreq: number, range: number = 2): { note: string; freq: number; semitones: number }[] => {
+      const lines: { note: string; freq: number; semitones: number }[] = [];
+      const semitonesRange = range * 12;
+      
+      // Find the nearest note to center
+      let centerSemitone = Math.round(12 * Math.log2(centerFreq / NOTE_FREQUENCIES["A"]) + 9); // A4 reference
+      
+      // Generate note lines within visible range
+      for (let s = -semitonesRange; s <= semitonesRange; s++) {
+        const totalSemitone = centerSemitone + s;
+        const noteIndex = ((totalSemitone % 12) + 12) % 12;
+        const octave = Math.floor((totalSemitone + 9) / 12) + 4; // Adjust for A4 reference
+        const noteName = NOTES[noteIndex];
+        const freq = NOTE_FREQUENCIES[noteName] * Math.pow(2, octave - 4);
+        
+        // Only show certain notes (C, E, G, A for cleaner grid)
+        if (["C", "E", "G", "A"].includes(noteName)) {
+          lines.push({ 
+            note: `${noteName}${octave}`, 
+            freq,
+            semitones: s
+          });
         }
       }
-    }
+      
+      return lines;
+    };
 
     const draw = () => {
       const width = canvas.width / 2;
       const height = canvas.height / 2;
+      const now = Date.now();
 
       // Clear with gradient background
       const bgGradient = ctx.createLinearGradient(0, 0, 0, height);
       bgGradient.addColorStop(0, "hsl(220, 20%, 8%)");
-      bgGradient.addColorStop(1, "hsl(220, 20%, 5%)");
+      bgGradient.addColorStop(0.5, "hsl(220, 20%, 6%)");
+      bgGradient.addColorStop(1, "hsl(220, 20%, 8%)");
       ctx.fillStyle = bgGradient;
       ctx.fillRect(0, 0, width, height);
 
-      // Draw grid lines
-      ctx.strokeStyle = "hsl(110, 50%, 25%, 0.2)";
+      // Calculate dynamic center frequency from recent pitch data
+      const timeWindow = 5000;
+      const recentHistory = pitchHistory.filter(p => now - p.time < timeWindow && p.corrected > 0);
+      
+      if (recentHistory.length > 0 && isActive) {
+        // Smooth center frequency tracking
+        const avgFreq = recentHistory.reduce((sum, p) => sum + p.corrected, 0) / recentHistory.length;
+        centerFreqRef.current += (avgFreq - centerFreqRef.current) * 0.05; // Smooth transition
+      }
+
+      const centerFreq = centerFreqRef.current;
+      const noteLines = getNoteLines(centerFreq, 1.5);
+
+      // Draw horizontal note grid lines
+      ctx.strokeStyle = "hsl(110, 50%, 25%, 0.15)";
       ctx.lineWidth = 1;
 
-      // Horizontal note lines
-      noteLines.forEach(({ note, freq }) => {
-        const y = freqToNotePosition(freq, minFreq, maxFreq) * height;
+      noteLines.forEach(({ note, freq, semitones }) => {
+        const y = freqToY(freq, centerFreq, height, 1.5);
+        
+        // Draw line
         ctx.beginPath();
-        ctx.moveTo(0, y);
+        ctx.moveTo(40, y);
         ctx.lineTo(width, y);
         ctx.stroke();
 
-        // Note labels
-        ctx.fillStyle = "hsl(0, 0%, 50%)";
-        ctx.font = "10px Rajdhani";
-        ctx.fillText(note, 5, y - 3);
+        // Note label
+        ctx.fillStyle = semitones === 0 ? "hsl(110, 100%, 55%)" : "hsl(0, 0%, 40%)";
+        ctx.font = semitones === 0 ? "bold 11px Rajdhani" : "10px Rajdhani";
+        ctx.textAlign = "left";
+        ctx.fillText(note, 5, y + 4);
       });
 
-      // Vertical time lines
-      for (let i = 0; i < 10; i++) {
-        const x = (i / 10) * width;
+      // Draw center line (current target note)
+      ctx.strokeStyle = "hsl(110, 100%, 55%, 0.3)";
+      ctx.lineWidth = 2;
+      ctx.setLineDash([5, 5]);
+      ctx.beginPath();
+      ctx.moveTo(40, height / 2);
+      ctx.lineTo(width, height / 2);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      // Vertical time grid
+      ctx.strokeStyle = "hsl(110, 50%, 25%, 0.1)";
+      ctx.lineWidth = 1;
+      for (let i = 1; i < 10; i++) {
+        const x = 40 + (i / 10) * (width - 40);
         ctx.beginPath();
         ctx.moveTo(x, 0);
         ctx.lineTo(x, height);
         ctx.stroke();
       }
 
-      const now = Date.now();
+      // Draw pitch curves
+      if (recentHistory.length > 1 && isActive) {
+        // INPUT PITCH (Orange - raw detected pitch)
+        ctx.beginPath();
+        ctx.strokeStyle = "hsl(30, 100%, 55%)";
+        ctx.lineWidth = 2;
+        ctx.shadowColor = "hsl(30, 100%, 55%)";
+        ctx.shadowBlur = 6;
 
-      // Draw real pitch data if available
-      if (pitchHistory.length > 1 && isActive) {
-        const timeWindow = 5000; // 5 seconds of history
-        const recentHistory = pitchHistory.filter(p => now - p.time < timeWindow && p.input > 0);
+        let firstPoint = true;
+        recentHistory.forEach((point) => {
+          const x = 40 + ((timeWindow - (now - point.time)) / timeWindow) * (width - 40);
+          const y = freqToY(point.input, centerFreq, height, 1.5);
 
-        if (recentHistory.length > 1) {
-          // Draw input pitch (orange - raw detected pitch)
+          if (firstPoint) {
+            ctx.moveTo(x, y);
+            firstPoint = false;
+          } else {
+            ctx.lineTo(x, y);
+          }
+        });
+        ctx.stroke();
+        ctx.shadowBlur = 0;
+
+        // CORRECTED PITCH (Green - pitch-corrected output)
+        ctx.beginPath();
+        ctx.strokeStyle = "hsl(110, 100%, 55%)";
+        ctx.lineWidth = 3;
+        ctx.shadowColor = "hsl(110, 100%, 55%)";
+        ctx.shadowBlur = 15;
+
+        firstPoint = true;
+        recentHistory.forEach((point) => {
+          const x = 40 + ((timeWindow - (now - point.time)) / timeWindow) * (width - 40);
+          const y = freqToY(point.corrected, centerFreq, height, 1.5);
+
+          if (firstPoint) {
+            ctx.moveTo(x, y);
+            firstPoint = false;
+          } else {
+            ctx.lineTo(x, y);
+          }
+        });
+        ctx.stroke();
+        ctx.shadowBlur = 0;
+
+        // Current pitch indicators (right side)
+        const lastPoint = recentHistory[recentHistory.length - 1];
+        if (lastPoint) {
+          // Input indicator (orange dot)
+          const inputY = freqToY(lastPoint.input, centerFreq, height, 1.5);
           ctx.beginPath();
-          ctx.strokeStyle = "hsl(30, 100%, 50%)";
-          ctx.lineWidth = 2;
-          ctx.shadowColor = "hsl(30, 100%, 50%)";
-          ctx.shadowBlur = 8;
+          ctx.fillStyle = "hsl(30, 100%, 55%)";
+          ctx.arc(width - 20, inputY, 4, 0, Math.PI * 2);
+          ctx.fill();
 
-          let firstPoint = true;
-          recentHistory.forEach((point) => {
-            const x = ((timeWindow - (now - point.time)) / timeWindow) * width;
-            const y = freqToNotePosition(point.input, minFreq, maxFreq) * height;
-
-            if (firstPoint) {
-              ctx.moveTo(x, y);
-              firstPoint = false;
-            } else {
-              ctx.lineTo(x, y);
-            }
-          });
-          ctx.stroke();
-          ctx.shadowBlur = 0;
-
-          // Draw corrected pitch (green - pitch-corrected output)
+          // Corrected indicator (green dot with glow)
+          const correctedY = freqToY(lastPoint.corrected, centerFreq, height, 1.5);
           ctx.beginPath();
-          ctx.strokeStyle = "hsl(110, 100%, 55%)";
-          ctx.lineWidth = 3;
+          ctx.fillStyle = "hsl(110, 100%, 55%)";
           ctx.shadowColor = "hsl(110, 100%, 55%)";
-          ctx.shadowBlur = 12;
-
-          firstPoint = true;
-          recentHistory.forEach((point) => {
-            const x = ((timeWindow - (now - point.time)) / timeWindow) * width;
-            const y = freqToNotePosition(point.corrected, minFreq, maxFreq) * height;
-
-            if (firstPoint) {
-              ctx.moveTo(x, y);
-              firstPoint = false;
-            } else {
-              ctx.lineTo(x, y);
-            }
-          });
-          ctx.stroke();
+          ctx.shadowBlur = 15;
+          ctx.arc(width - 10, correctedY, 6, 0, Math.PI * 2);
+          ctx.fill();
           ctx.shadowBlur = 0;
 
-          // Current pitch indicator
-          const lastPoint = recentHistory[recentHistory.length - 1];
-          if (lastPoint) {
-            const currentY = freqToNotePosition(lastPoint.corrected, minFreq, maxFreq) * height;
-            
-            // Draw current note label
-            ctx.fillStyle = "hsl(110, 100%, 55%)";
-            ctx.font = "bold 14px Orbitron";
-            ctx.textAlign = "right";
-            ctx.fillText(getNoteName(lastPoint.corrected), width - 10, currentY + 5);
-            ctx.textAlign = "left";
+          // Current note label
+          ctx.fillStyle = "hsl(110, 100%, 55%)";
+          ctx.font = "bold 12px Orbitron";
+          ctx.textAlign = "right";
+          ctx.fillText(getNoteName(lastPoint.corrected), width - 25, correctedY + 4);
+
+          // Draw correction arrow if there's significant pitch error
+          const pitchDiff = Math.abs(lastPoint.corrected - lastPoint.input);
+          if (pitchDiff > 5) {
+            ctx.strokeStyle = "hsl(110, 100%, 55%, 0.5)";
+            ctx.lineWidth = 1;
+            ctx.setLineDash([2, 2]);
+            ctx.beginPath();
+            ctx.moveTo(width - 20, inputY);
+            ctx.lineTo(width - 10, correctedY);
+            ctx.stroke();
+            ctx.setLineDash([]);
           }
         }
       } else {
         // Demo animation when not active
-        timeRef.current += 0.02;
+        timeRef.current += 0.015;
+        const demoCenter = 350;
+        centerFreqRef.current = demoCenter;
 
         const demoNotes = [261.63, 293.66, 329.63, 349.23, 392.00, 440.00, 493.88, 523.25];
         
-        // Draw demo input pitch (orange)
+        // Demo input pitch (orange - with natural wobble)
         ctx.beginPath();
-        ctx.strokeStyle = "hsl(30, 100%, 50%)";
+        ctx.strokeStyle = "hsl(30, 100%, 55%)";
         ctx.lineWidth = 2;
-        ctx.shadowColor = "hsl(30, 100%, 50%)";
-        ctx.shadowBlur = 8;
+        ctx.shadowColor = "hsl(30, 100%, 55%)";
+        ctx.shadowBlur = 6;
 
-        for (let x = 0; x < width; x++) {
-          const t = (x / width) * 4 + timeRef.current;
+        for (let x = 40; x < width; x++) {
+          const t = ((x - 40) / (width - 40)) * 4 + timeRef.current;
           const noteIndex = Math.floor((Math.sin(t * 0.5) * 0.5 + 0.5) * (demoNotes.length - 1));
           const baseFreq = demoNotes[noteIndex];
-          const wobble = baseFreq * (1 + Math.sin(t * 8) * 0.03 + Math.sin(t * 12) * 0.01);
-          const y = freqToNotePosition(wobble, minFreq, maxFreq) * height;
+          // Add natural vocal wobble (vibrato + pitch drift)
+          const wobble = baseFreq * (1 + Math.sin(t * 8) * 0.04 + Math.sin(t * 12) * 0.015);
+          const y = freqToY(wobble, demoCenter, height, 1.5);
 
-          if (x === 0) ctx.moveTo(x, y);
+          if (x === 40) ctx.moveTo(x, y);
           else ctx.lineTo(x, y);
         }
         ctx.stroke();
         ctx.shadowBlur = 0;
 
-        // Draw demo corrected pitch (green)
+        // Demo corrected pitch (green - snapped to notes)
         ctx.beginPath();
         ctx.strokeStyle = "hsl(110, 100%, 55%)";
         ctx.lineWidth = 3;
         ctx.shadowColor = "hsl(110, 100%, 55%)";
-        ctx.shadowBlur = 12;
+        ctx.shadowBlur = 15;
 
-        for (let x = 0; x < width; x++) {
-          const t = (x / width) * 4 + timeRef.current;
+        for (let x = 40; x < width; x++) {
+          const t = ((x - 40) / (width - 40)) * 4 + timeRef.current;
           const noteIndex = Math.floor((Math.sin(t * 0.5) * 0.5 + 0.5) * (demoNotes.length - 1));
           const baseFreq = demoNotes[noteIndex];
-          const vibrato = baseFreq * (1 + Math.sin(t * 15) * 0.005);
-          const y = freqToNotePosition(vibrato, minFreq, maxFreq) * height;
+          // Corrected has minimal vibrato (tight tuning)
+          const corrected = baseFreq * (1 + Math.sin(t * 15) * 0.003);
+          const y = freqToY(corrected, demoCenter, height, 1.5);
 
-          if (x === 0) ctx.moveTo(x, y);
+          if (x === 40) ctx.moveTo(x, y);
           else ctx.lineTo(x, y);
         }
         ctx.stroke();
         ctx.shadowBlur = 0;
 
         // Demo playhead
-        const playheadX = ((timeRef.current * 50) % width);
+        const playheadX = 40 + ((timeRef.current * 40) % (width - 40));
         ctx.beginPath();
-        ctx.strokeStyle = "hsl(110, 100%, 55%, 0.8)";
+        ctx.strokeStyle = "hsl(110, 100%, 55%, 0.6)";
         ctx.lineWidth = 2;
         ctx.moveTo(playheadX, 0);
         ctx.lineTo(playheadX, height);
