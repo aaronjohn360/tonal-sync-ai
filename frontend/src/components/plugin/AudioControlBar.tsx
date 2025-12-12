@@ -439,6 +439,22 @@ export const AudioControlBar = ({
             )}>
               {isBypassed ? "Bypassed" : correctedPitch > 0 ? `${correctedPitch}Hz` : "-"}
             </div>
+            
+            {/* Pitch Shift Ratio Indicator - Shows when pitch is being actively shifted */}
+            {isProcessing && !isBypassed && currentPitchShift !== 1.0 && (
+              <div className={cn(
+                "flex items-center gap-2 px-3 py-1 rounded-full text-[10px] font-mono",
+                "bg-gradient-to-r",
+                currentPitchShift > 1.0 
+                  ? "from-cyan-500/20 to-blue-500/10 text-cyan-400 border border-cyan-500/30"
+                  : "from-orange-500/20 to-red-500/10 text-orange-400 border border-orange-500/30"
+              )}>
+                <span>Shift:</span>
+                <span className="font-bold">
+                  {currentPitchShift > 1.0 ? "↑" : "↓"} {((currentPitchShift - 1) * 100).toFixed(1)}%
+                </span>
+              </div>
+            )}
           </div>
 
           {/* HD Output Section */}
