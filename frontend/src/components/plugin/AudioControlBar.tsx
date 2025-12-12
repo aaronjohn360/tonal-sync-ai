@@ -129,7 +129,8 @@ export const AudioControlBar = ({
   outputLevel = 0,
   correctionMode = "modern",
   onCorrectionModeChange,
-  isProcessing = false
+  isProcessing = false,
+  currentPitchShift = 1.0
 }: AudioControlBarProps) => {
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [hasRequestedDevices, setHasRequestedDevices] = useState(false);
