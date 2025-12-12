@@ -5,7 +5,7 @@ import { PitchGraph } from "./PitchGraph";
 import { useAudioProcessor } from "@/hooks/useAudioProcessor";
 import { 
   Mic, MicOff, Volume2, Power, Settings, ChevronDown, Check,
-  Music, Zap, Headphones, Palette, Sliders, Sparkles, X
+  Music, Zap, Headphones, Palette, X
 } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -19,24 +19,59 @@ import { Slider } from "@/components/ui/slider";
 
 // Color themes
 const THEMES = {
-  cyber: { primary: "hsl(150, 100%, 45%)", accent: "hsl(180, 100%, 50%)", name: "Cyber Green" },
-  neon: { primary: "hsl(280, 100%, 60%)", accent: "hsl(320, 100%, 60%)", name: "Neon Purple" },
-  sunset: { primary: "hsl(30, 100%, 55%)", accent: "hsl(0, 100%, 60%)", name: "Sunset Orange" },
-  ocean: { primary: "hsl(200, 100%, 55%)", accent: "hsl(180, 100%, 50%)", name: "Ocean Blue" },
-  matrix: { primary: "hsl(120, 100%, 45%)", accent: "hsl(120, 100%, 30%)", name: "Matrix" },
+  cyber: { primary: "rgb(0, 255, 136)", accent: "rgb(0, 200, 255)", name: "Cyber Green" },
+  neon: { primary: "rgb(180, 100, 255)", accent: "rgb(255, 100, 200)", name: "Neon Purple" },
+  sunset: { primary: "rgb(255, 140, 50)", accent: "rgb(255, 60, 60)", name: "Sunset Orange" },
+  ocean: { primary: "rgb(50, 180, 255)", accent: "rgb(50, 255, 200)", name: "Ocean Blue" },
+  matrix: { primary: "rgb(0, 255, 65)", accent: "rgb(0, 180, 40)", name: "Matrix" },
 };
 
 const NOTES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
 const NOTES_FLAT = ["C", "Db", "D", "Eb", "E", "F", "Gb", "G", "Ab", "A", "Bb", "B"];
 const SCALES = ["Major", "Minor", "Chromatic", "Pentatonic", "Blues", "Dorian", "Mixolydian"];
 
+// RGB Pulsing Icon Component
+const RGBIcon = ({ size = 40 }: { size?: number }) => {
+  const [colorIndex, setColorIndex] = useState(0);
+  const colors = ["#3B82F6", "#8B5CF6", "#EF4444", "#EC4899"]; // Blue, Purple, Red, Pink
+  
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setColorIndex(prev => (prev + 1) % colors.length);
+    }, 1500);
+    return () => clearInterval(interval);
+  }, []);
+  
+  return (
+    <div 
+      className="relative flex items-center justify-center rounded-xl transition-all duration-1000"
+      style={{ 
+        width: size, 
+        height: size,
+        background: `linear-gradient(135deg, ${colors[colorIndex]}, ${colors[(colorIndex + 1) % colors.length]})`,
+        boxShadow: `0 0 20px ${colors[colorIndex]}80, 0 0 40px ${colors[colorIndex]}40`
+      }}
+    >
+      <span 
+        className="font-display font-black text-white transition-all duration-500"
+        style={{ fontSize: size * 0.5, textShadow: `0 0 10px white` }}
+      >
+        T
+      </span>
+    </div>
+  );
+};
+
 export const TonalSyncPlugin = () => {
   // Intro state
-  const [showIntro, setShowIntro] = useState(true);
-  const [introFading, setIntroFading] = useState(false);
+  const [introPhase, setIntroPhase] = useState<"typing" | "waiting" | "glow" | "done">("typing");
+  const [typedText, setTypedText] = useState("");
+  const [showByLine, setShowByLine] = useState(false);
+  const [showDot, setShowDot] = useState(false);
+  const [glowOpacity, setGlowOpacity] = useState(0);
   
   // Core controls
-  const [retuneSpeed, setRetuneSpeed] = useState(0); // Default to 0 for instant
+  const [retuneSpeed, setRetuneSpeed] = useState(0);
   const [humanize, setHumanize] = useState(15);
   const [flexTune, setFlexTune] = useState(30);
   const [formant, setFormant] = useState(0);
@@ -52,8 +87,6 @@ export const TonalSyncPlugin = () => {
   const [autoEQStrength, setAutoEQStrength] = useState(50);
   const [transparencyMode, setTransparencyMode] = useState(true);
   const [smoothing, setSmoothing] = useState(80);
-  const [vibrato, setVibrato] = useState(50);
-  const [vibratoRate, setVibratoRate] = useState(5);
   
   // UI state
   const [isLoading, setIsLoading] = useState(false);
@@ -71,21 +104,49 @@ export const TonalSyncPlugin = () => {
     selectedScale
   });
 
-  // Intro animation
+  // Typewriter intro animation
   useEffect(() => {
-    const timer = setTimeout(() => {
-      setIntroFading(true);
-      setTimeout(() => setShowIntro(false), 1000);
-    }, 2500);
-    return () => clearTimeout(timer);
-  }, []);
+    if (introPhase !== "typing") return;
+    
+    const fullText = "TONAL-SYNC";
+    let i = 0;
+    
+    const typeInterval = setInterval(() => {
+      if (i <= fullText.length) {
+        setTypedText(fullText.slice(0, i));
+        i++;
+      } else {
+        clearInterval(typeInterval);
+        // Show "By Sweav" after typing
+        setTimeout(() => {
+          setShowByLine(true);
+          // Wait 3 seconds then show dot
+          setTimeout(() => {
+            setShowDot(true);
+            setIntroPhase("waiting");
+            // After dot, start glow
+            setTimeout(() => {
+              setIntroPhase("glow");
+              setGlowOpacity(1);
+              // After glow, reveal interface
+              setTimeout(() => {
+                setIntroPhase("done");
+              }, 2000);
+            }, 500);
+          }, 3000);
+        }, 300);
+      }
+    }, 100);
+    
+    return () => clearInterval(typeInterval);
+  }, [introPhase]);
 
   const handleAudioStart = useCallback(async (deviceId: string) => {
     setIsLoading(true);
     setAudioError(null);
     try {
       await audioProcessor.start(deviceId);
-      toast.success("Audio started - 0ms latency");
+      toast.success("Audio started");
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Failed to start";
       setAudioError(msg);
@@ -113,62 +174,75 @@ export const TonalSyncPlugin = () => {
   const currentTheme = THEMES[theme];
   const notesList = useFlats ? NOTES_FLAT : NOTES;
 
-  // Intro Screen
-  if (showIntro) {
-    return (
-      <div className={cn(
-        "fixed inset-0 bg-black flex items-center justify-center z-50",
-        "transition-opacity duration-1000",
-        introFading && "opacity-0"
-      )}>
-        <div className="text-center">
-          <h1 className={cn(
-            "text-6xl md:text-8xl font-display font-bold tracking-widest",
-            "bg-gradient-to-r from-primary via-cyan-400 to-primary bg-clip-text text-transparent",
-            "animate-pulse"
-          )}>
-            TONAL-SYNC
-          </h1>
-          <p className="text-xl md:text-2xl text-muted-foreground mt-4 tracking-wider">
-            By <span className="text-primary font-semibold">Sweav</span>
-          </p>
-          <div className="mt-8 flex justify-center gap-1">
-            {[...Array(5)].map((_, i) => (
-              <div 
-                key={i}
-                className="w-2 h-8 bg-primary rounded-full animate-bounce"
-                style={{ animationDelay: `${i * 0.1}s` }}
-              />
-            ))}
-          </div>
-        </div>
-      </div>
-    );
-  }
-
   return (
-    <div 
-      className="min-h-screen bg-black flex items-center justify-center p-4"
-      style={{ 
-        '--theme-primary': currentTheme.primary,
-        '--theme-accent': currentTheme.accent 
-      } as React.CSSProperties}
-    >
-      <div className={cn(
-        "w-full max-w-4xl relative",
-        "bg-gradient-to-br from-gray-900/95 via-black/95 to-gray-900/95",
-        "backdrop-blur-xl rounded-3xl",
-        "border-2 shadow-2xl",
-        "transition-all duration-500"
-      )}
-      style={{ 
-        borderColor: currentTheme.primary,
-        boxShadow: `0 0 60px ${currentTheme.primary}20, inset 0 0 60px ${currentTheme.primary}05`
-      }}>
+    <div className="min-h-screen bg-black flex items-center justify-center p-4">
+      <div 
+        className={cn(
+          "w-full max-w-4xl relative",
+          "bg-gradient-to-br from-gray-900/95 via-black/95 to-gray-900/95",
+          "backdrop-blur-xl rounded-3xl",
+          "border-2 shadow-2xl",
+          "transition-all duration-500 overflow-hidden"
+        )}
+        style={{ 
+          borderColor: currentTheme.primary,
+          boxShadow: `0 0 60px ${currentTheme.primary}20, inset 0 0 60px ${currentTheme.primary}05`
+        }}
+      >
+        {/* Intro Animation - Inside Plugin */}
+        {introPhase !== "done" && (
+          <div className={cn(
+            "absolute inset-0 z-50 flex flex-col items-center justify-center bg-black",
+            "transition-opacity duration-1000",
+            introPhase === "glow" && "opacity-0"
+          )}>
+            {/* RGB Glow Overlay */}
+            <div 
+              className="absolute inset-0 transition-opacity duration-2000"
+              style={{
+                opacity: glowOpacity,
+                background: `linear-gradient(135deg, 
+                  rgba(59, 130, 246, 0.3), 
+                  rgba(139, 92, 246, 0.3), 
+                  rgba(236, 72, 153, 0.3), 
+                  rgba(239, 68, 68, 0.3)
+                )`,
+                filter: "blur(50px)"
+              }}
+            />
+            
+            {/* Main Text */}
+            <div className="relative z-10 text-center">
+              <h1 className="text-5xl md:text-7xl font-display font-black tracking-wider">
+                <span className="bg-gradient-to-r from-blue-500 via-purple-500 to-pink-500 bg-clip-text text-transparent">
+                  {typedText}
+                </span>
+                <span className={cn(
+                  "inline-block w-1 h-12 md:h-16 bg-white ml-1 animate-pulse",
+                  typedText.length === 10 && !showDot && "opacity-100",
+                  showDot && "opacity-0"
+                )} />
+              </h1>
+              
+              {showByLine && (
+                <p className={cn(
+                  "mt-4 text-xl md:text-2xl text-gray-400 transition-opacity duration-500",
+                  showByLine ? "opacity-100" : "opacity-0"
+                )}>
+                  By <span className="bg-gradient-to-r from-blue-400 to-purple-400 bg-clip-text text-transparent font-semibold">Sweav</span>
+                  <span className={cn(
+                    "transition-opacity duration-300",
+                    showDot ? "opacity-100" : "opacity-0"
+                  )}>.</span>
+                </p>
+              )}
+            </div>
+          </div>
+        )}
         
-        {/* Settings Popup - On Plugin */}
+        {/* Settings Popup */}
         {showSettings && (
-          <div className="absolute inset-4 bg-black/95 backdrop-blur-xl rounded-2xl z-50 p-6 border border-white/10 overflow-auto">
+          <div className="absolute inset-4 bg-black/95 backdrop-blur-xl rounded-2xl z-40 p-6 border border-white/10 overflow-auto">
             <div className="flex items-center justify-between mb-6">
               <h2 className="text-xl font-display font-bold" style={{ color: currentTheme.primary }}>
                 Advanced Settings
@@ -190,28 +264,20 @@ export const TonalSyncPlugin = () => {
                     onClick={() => setAutoEQ(!autoEQ)}
                     className={cn(
                       "px-3 py-1 rounded-full text-xs transition-all",
-                      autoEQ ? "bg-primary/20 text-primary" : "bg-white/10 text-muted-foreground"
+                      autoEQ ? "text-white" : "bg-white/10 text-muted-foreground"
                     )}
-                    style={autoEQ ? { backgroundColor: `${currentTheme.primary}20`, color: currentTheme.primary } : {}}
+                    style={autoEQ ? { backgroundColor: currentTheme.primary } : {}}
                   >
                     {autoEQ ? "ON" : "OFF"}
                   </button>
                 </div>
                 <div className="space-y-2">
                   <label className="text-sm text-muted-foreground">Strength: {autoEQStrength}%</label>
-                  <Slider 
-                    value={[autoEQStrength]} 
-                    onValueChange={([v]) => setAutoEQStrength(v)} 
-                    max={100}
-                    disabled={!autoEQ}
-                  />
+                  <Slider value={[autoEQStrength]} onValueChange={([v]) => setAutoEQStrength(v)} max={100} disabled={!autoEQ} />
                 </div>
-                <p className="text-xs text-muted-foreground">
-                  Automatically adjusts EQ based on detected notes for transparent, strong autotune
-                </p>
               </div>
 
-              {/* Transparency Mode */}
+              {/* Transparency */}
               <div className="space-y-4 p-4 rounded-xl bg-white/5 border border-white/10">
                 <div className="flex items-center justify-between">
                   <span className="font-medium">Transparency Mode</span>
@@ -219,9 +285,9 @@ export const TonalSyncPlugin = () => {
                     onClick={() => setTransparencyMode(!transparencyMode)}
                     className={cn(
                       "px-3 py-1 rounded-full text-xs transition-all",
-                      transparencyMode ? "bg-primary/20 text-primary" : "bg-white/10 text-muted-foreground"
+                      transparencyMode ? "text-white" : "bg-white/10 text-muted-foreground"
                     )}
-                    style={transparencyMode ? { backgroundColor: `${currentTheme.primary}20`, color: currentTheme.primary } : {}}
+                    style={transparencyMode ? { backgroundColor: currentTheme.primary } : {}}
                   >
                     {transparencyMode ? "ON" : "OFF"}
                   </button>
@@ -230,37 +296,21 @@ export const TonalSyncPlugin = () => {
                   <label className="text-sm text-muted-foreground">Smoothing: {smoothing}%</label>
                   <Slider value={[smoothing]} onValueChange={([v]) => setSmoothing(v)} max={100} />
                 </div>
-                <p className="text-xs text-muted-foreground">
-                  Ultra-smooth pitch transitions for natural, transparent correction
-                </p>
-              </div>
-
-              {/* Vibrato */}
-              <div className="space-y-4 p-4 rounded-xl bg-white/5 border border-white/10">
-                <span className="font-medium">Vibrato Control</span>
-                <div className="space-y-2">
-                  <label className="text-sm text-muted-foreground">Depth: {vibrato}%</label>
-                  <Slider value={[vibrato]} onValueChange={([v]) => setVibrato(v)} max={100} />
-                </div>
-                <div className="space-y-2">
-                  <label className="text-sm text-muted-foreground">Rate: {vibratoRate}Hz</label>
-                  <Slider value={[vibratoRate]} onValueChange={([v]) => setVibratoRate(v)} min={1} max={10} />
-                </div>
               </div>
 
               {/* Color Theme */}
-              <div className="space-y-4 p-4 rounded-xl bg-white/5 border border-white/10">
+              <div className="space-y-4 p-4 rounded-xl bg-white/5 border border-white/10 md:col-span-2">
                 <div className="flex items-center gap-2">
                   <Palette className="w-4 h-4" />
                   <span className="font-medium">Interface Color</span>
                 </div>
-                <div className="flex flex-wrap gap-2">
+                <div className="flex flex-wrap gap-3">
                   {Object.entries(THEMES).map(([key, t]) => (
                     <button
                       key={key}
                       onClick={() => setTheme(key as keyof typeof THEMES)}
                       className={cn(
-                        "w-10 h-10 rounded-full border-2 transition-all",
+                        "w-12 h-12 rounded-full border-2 transition-all",
                         theme === key ? "scale-110 border-white" : "border-transparent hover:scale-105"
                       )}
                       style={{ backgroundColor: t.primary }}
@@ -277,17 +327,12 @@ export const TonalSyncPlugin = () => {
         {/* Header */}
         <div className="flex items-center justify-between p-4 border-b border-white/10">
           <div className="flex items-center gap-3">
-            <div 
-              className="w-10 h-10 rounded-xl flex items-center justify-center"
-              style={{ background: `linear-gradient(135deg, ${currentTheme.primary}, ${currentTheme.accent})` }}
-            >
-              <Sparkles className="w-5 h-5 text-white" />
-            </div>
+            <RGBIcon size={44} />
             <div>
               <h1 className="text-lg font-display font-bold tracking-wider">
                 TONAL<span style={{ color: currentTheme.primary }}>SYNC</span>
               </h1>
-              <p className="text-[10px] text-muted-foreground">BY SWEAV • 0ms LATENCY</p>
+              <p className="text-[10px] text-muted-foreground">BY SWEAV</p>
             </div>
           </div>
 
@@ -317,13 +362,9 @@ export const TonalSyncPlugin = () => {
               </button>
             </div>
 
-            {/* Settings Button */}
             <button 
               onClick={() => setShowSettings(!showSettings)}
-              className={cn(
-                "p-2 rounded-lg transition-all",
-                showSettings ? "bg-white/20" : "hover:bg-white/10"
-              )}
+              className="p-2 rounded-lg hover:bg-white/10 transition-colors"
             >
               <Settings className="w-5 h-5" />
             </button>
@@ -332,7 +373,7 @@ export const TonalSyncPlugin = () => {
 
         {/* Main Content */}
         <div className="p-4 space-y-4">
-          {/* Top Row: Input + Monitor + Bypass */}
+          {/* Input + Monitor + Bypass */}
           <div className="flex items-center gap-3 flex-wrap">
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
@@ -347,19 +388,17 @@ export const TonalSyncPlugin = () => {
                   style={audioProcessor.isActive ? { backgroundColor: currentTheme.primary } : {}}
                 >
                   {audioProcessor.isActive ? <Mic className="w-4 h-4" /> : <MicOff className="w-4 h-4" />}
-                  <span className="max-w-[100px] truncate">
-                    {isLoading ? "..." : audioProcessor.isActive ? "ACTIVE" : "INPUT"}
-                  </span>
+                  <span>{isLoading ? "..." : audioProcessor.isActive ? "ACTIVE" : "INPUT"}</span>
                   <ChevronDown className="w-3 h-3" />
                 </button>
               </DropdownMenuTrigger>
               <DropdownMenuContent className="w-64 bg-gray-900 border-white/10">
-                <DropdownMenuItem onClick={handleAudioStop} className="text-muted-foreground">
-                  <MicOff className="w-4 h-4 mr-2" />None (Stop)
+                <DropdownMenuItem onClick={handleAudioStop}>
+                  <MicOff className="w-4 h-4 mr-2" />None
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
                 {audioProcessor.availableDevices.length === 0 ? (
-                  <DropdownMenuItem onClick={handleRequestDevices}>Click to request access</DropdownMenuItem>
+                  <DropdownMenuItem onClick={handleRequestDevices}>Click for access</DropdownMenuItem>
                 ) : (
                   audioProcessor.availableDevices.map(device => (
                     <DropdownMenuItem
@@ -378,7 +417,6 @@ export const TonalSyncPlugin = () => {
               </DropdownMenuContent>
             </DropdownMenu>
 
-            {/* Monitor */}
             <div className="flex items-center gap-2 flex-1 min-w-[120px]">
               <button
                 onClick={() => audioProcessor.setMonitoring(!audioProcessor.isMonitoring)}
@@ -396,7 +434,6 @@ export const TonalSyncPlugin = () => {
               <span className="text-xs font-mono w-8">{audioProcessor.monitorVolume}%</span>
             </div>
 
-            {/* Bypass */}
             <button
               onClick={() => audioProcessor.setBypass(!audioProcessor.isBypassed)}
               disabled={!audioProcessor.isActive}
@@ -412,9 +449,9 @@ export const TonalSyncPlugin = () => {
             </button>
           </div>
 
-          {/* Pitch Graph - Centered */}
+          {/* Pitch Graph */}
           <div className="flex justify-center">
-            <div className="w-full max-w-2xl h-32 md:h-40">
+            <div className="w-full max-w-2xl h-36">
               <PitchGraph
                 className="h-full rounded-xl border border-white/10"
                 pitchHistory={audioProcessor.pitchHistory}
@@ -423,42 +460,30 @@ export const TonalSyncPlugin = () => {
             </div>
           </div>
 
-          {/* Control Knobs - Centered */}
+          {/* Control Knobs */}
           <div className="flex justify-center">
             <div className="grid grid-cols-5 gap-4 md:gap-8">
-              <div className="flex flex-col items-center">
-                <Knob value={retuneSpeed} onChange={setRetuneSpeed} min={0} max={100} size="sm" />
-                <span className="text-[10px] text-muted-foreground mt-1 uppercase">Retune</span>
-                <span className="text-xs font-mono" style={{ color: currentTheme.primary }}>{retuneSpeed}ms</span>
-              </div>
-              <div className="flex flex-col items-center">
-                <Knob value={humanize} onChange={setHumanize} min={0} max={100} size="sm" />
-                <span className="text-[10px] text-muted-foreground mt-1 uppercase">Human</span>
-                <span className="text-xs font-mono" style={{ color: currentTheme.primary }}>{humanize}%</span>
-              </div>
-              <div className="flex flex-col items-center">
-                <Knob value={flexTune} onChange={setFlexTune} min={0} max={100} size="sm" />
-                <span className="text-[10px] text-muted-foreground mt-1 uppercase">Flex</span>
-                <span className="text-xs font-mono" style={{ color: currentTheme.primary }}>{flexTune}%</span>
-              </div>
-              <div className="flex flex-col items-center">
-                <Knob value={formant} onChange={setFormant} min={-12} max={12} size="sm" />
-                <span className="text-[10px] text-muted-foreground mt-1 uppercase">Formant</span>
-                <span className="text-xs font-mono" style={{ color: currentTheme.primary }}>{formant}st</span>
-              </div>
-              <div className="flex flex-col items-center">
-                <Knob value={mix} onChange={setMix} min={0} max={100} size="sm" />
-                <span className="text-[10px] text-muted-foreground mt-1 uppercase">Mix</span>
-                <span className="text-xs font-mono" style={{ color: currentTheme.primary }}>{mix}%</span>
-              </div>
+              {[
+                { value: retuneSpeed, set: setRetuneSpeed, label: "Retune", unit: "ms" },
+                { value: humanize, set: setHumanize, label: "Human", unit: "%" },
+                { value: flexTune, set: setFlexTune, label: "Flex", unit: "%" },
+                { value: formant, set: setFormant, label: "Formant", unit: "st", min: -12, max: 12 },
+                { value: mix, set: setMix, label: "Mix", unit: "%" },
+              ].map((ctrl, i) => (
+                <div key={i} className="flex flex-col items-center">
+                  <Knob value={ctrl.value} onChange={ctrl.set} min={ctrl.min || 0} max={ctrl.max || 100} size="sm" />
+                  <span className="text-[10px] text-muted-foreground mt-1 uppercase">{ctrl.label}</span>
+                  <span className="text-xs font-mono" style={{ color: currentTheme.primary }}>{ctrl.value}{ctrl.unit}</span>
+                </div>
+              ))}
             </div>
           </div>
 
-          {/* Pitch Display - When Active */}
-          {audioProcessor.isActive && (
+          {/* Active Pitch Display */}
+          {audioProcessor.isActive && audioProcessor.isProcessing && (
             <div className="flex justify-center">
               <div 
-                className="flex items-center gap-4 px-6 py-3 rounded-xl border"
+                className="flex items-center gap-4 px-6 py-2 rounded-xl border"
                 style={{ borderColor: `${currentTheme.primary}50`, backgroundColor: `${currentTheme.primary}10` }}
               >
                 <span className="text-lg font-mono text-muted-foreground">{audioProcessor.detectedNote}</span>
@@ -470,7 +495,7 @@ export const TonalSyncPlugin = () => {
                 )}>
                   {audioProcessor.pitchError > 0 ? "+" : ""}{audioProcessor.pitchError}¢
                 </span>
-                <span className="text-2xl">→</span>
+                <span className="text-xl">→</span>
                 <span className="text-2xl font-display font-bold" style={{ color: currentTheme.primary }}>
                   {audioProcessor.correctedNote}
                 </span>
@@ -478,27 +503,23 @@ export const TonalSyncPlugin = () => {
             </div>
           )}
 
-          {/* Bottom Section: Key/Scale + Piano */}
+          {/* Key/Scale + Meters + Piano */}
           <div className="border-t border-white/10 pt-4">
-            {/* Key & Scale Selector - Left */}
-            <div className="flex items-start gap-4 mb-3">
+            <div className="flex items-start gap-4 mb-4">
+              {/* Key & Scale */}
               <div className="space-y-2">
                 <div className="flex items-center gap-2">
-                  <span className="text-xs text-muted-foreground uppercase">Key</span>
+                  <span className="text-xs text-muted-foreground">KEY</span>
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
-                      <button 
-                        className="px-3 py-1.5 rounded-lg border border-white/20 bg-white/5 text-sm font-display"
-                        style={{ color: currentTheme.primary }}
-                      >
-                        {selectedKey} <ChevronDown className="w-3 h-3 inline ml-1" />
+                      <button className="px-3 py-1.5 rounded-lg border border-white/20 bg-white/5 text-sm font-display" style={{ color: currentTheme.primary }}>
+                        {selectedKey} <ChevronDown className="w-3 h-3 inline" />
                       </button>
                     </DropdownMenuTrigger>
                     <DropdownMenuContent className="bg-gray-900 border-white/10">
                       {notesList.map(note => (
                         <DropdownMenuItem key={note} onClick={() => setSelectedKey(note)}>
-                          {note}
-                          {selectedKey === note && <Check className="w-4 h-4 ml-2" />}
+                          {note} {selectedKey === note && <Check className="w-4 h-4 ml-2" />}
                         </DropdownMenuItem>
                       ))}
                     </DropdownMenuContent>
@@ -506,82 +527,81 @@ export const TonalSyncPlugin = () => {
                 </div>
                 
                 <div className="flex items-center gap-2">
-                  <span className="text-xs text-muted-foreground uppercase">Scale</span>
+                  <span className="text-xs text-muted-foreground">SCALE</span>
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
                       <button className="px-3 py-1.5 rounded-lg border border-white/20 bg-white/5 text-sm">
-                        {selectedScale} <ChevronDown className="w-3 h-3 inline ml-1" />
+                        {selectedScale} <ChevronDown className="w-3 h-3 inline" />
                       </button>
                     </DropdownMenuTrigger>
                     <DropdownMenuContent className="bg-gray-900 border-white/10">
                       {SCALES.map(scale => (
                         <DropdownMenuItem key={scale} onClick={() => setSelectedScale(scale)}>
-                          {scale}
-                          {selectedScale === scale && <Check className="w-4 h-4 ml-2" />}
+                          {scale} {selectedScale === scale && <Check className="w-4 h-4 ml-2" />}
                         </DropdownMenuItem>
                       ))}
                     </DropdownMenuContent>
                   </DropdownMenu>
                 </div>
 
-                {/* Sharp/Flat Toggle */}
                 <div className="flex items-center gap-2">
                   <button
                     onClick={() => setUseFlats(false)}
-                    className={cn(
-                      "px-2 py-1 rounded text-xs transition-all",
-                      !useFlats ? "bg-white/20 text-white" : "text-muted-foreground hover:text-white"
-                    )}
+                    className={cn("px-2 py-1 rounded text-xs transition-all", !useFlats ? "bg-white/20 text-white" : "text-muted-foreground")}
                   >
                     # Sharp
                   </button>
                   <button
                     onClick={() => setUseFlats(true)}
-                    className={cn(
-                      "px-2 py-1 rounded text-xs transition-all",
-                      useFlats ? "bg-white/20 text-white" : "text-muted-foreground hover:text-white"
-                    )}
+                    className={cn("px-2 py-1 rounded text-xs transition-all", useFlats ? "bg-white/20 text-white" : "text-muted-foreground")}
                   >
                     ♭ Flat
                   </button>
                 </div>
               </div>
 
-              {/* Level Meters - Right */}
-              <div className="flex-1 flex justify-end gap-4">
+              {/* Real-time Level Meters */}
+              <div className="flex-1 flex justify-end gap-6">
                 <div className="text-center">
-                  <div className="text-[10px] text-muted-foreground mb-1">IN</div>
-                  <div className="w-3 h-16 bg-white/10 rounded-full overflow-hidden relative">
+                  <div className="text-[10px] text-muted-foreground mb-1">INPUT</div>
+                  <div className="w-4 h-24 bg-white/10 rounded-full overflow-hidden relative">
                     <div 
                       className="absolute bottom-0 w-full transition-all duration-75 rounded-full"
                       style={{ 
                         height: `${audioProcessor.inputLevel}%`,
-                        backgroundColor: audioProcessor.inputLevel > 85 ? '#ef4444' : currentTheme.primary
+                        backgroundColor: audioProcessor.inputLevel > 85 ? '#ef4444' : audioProcessor.inputLevel > 70 ? '#eab308' : currentTheme.primary
                       }}
                     />
                   </div>
+                  <div className="text-[10px] font-mono mt-1" style={{ color: currentTheme.primary }}>
+                    {Math.round(audioProcessor.inputLevel)}
+                  </div>
                 </div>
                 <div className="text-center">
-                  <div className="text-[10px] text-muted-foreground mb-1">OUT</div>
-                  <div className="w-3 h-16 bg-white/10 rounded-full overflow-hidden relative">
+                  <div className="text-[10px] text-muted-foreground mb-1">OUTPUT</div>
+                  <div className="w-4 h-24 bg-white/10 rounded-full overflow-hidden relative">
                     <div 
                       className="absolute bottom-0 w-full transition-all duration-75 rounded-full"
                       style={{ 
                         height: `${audioProcessor.isBypassed ? 0 : audioProcessor.outputLevel}%`,
-                        backgroundColor: audioProcessor.outputLevel > 85 ? '#ef4444' : currentTheme.primary
+                        backgroundColor: audioProcessor.outputLevel > 85 ? '#ef4444' : audioProcessor.outputLevel > 70 ? '#eab308' : currentTheme.primary
                       }}
                     />
+                  </div>
+                  <div className="text-[10px] font-mono mt-1" style={{ color: currentTheme.primary }}>
+                    {Math.round(audioProcessor.isBypassed ? 0 : audioProcessor.outputLevel)}
                   </div>
                 </div>
               </div>
             </div>
 
-            {/* Piano Keyboard */}
+            {/* Piano - Bigger */}
             <div className="flex justify-center">
-              <div className="flex gap-0.5">
+              <div className="flex gap-0.5 relative">
                 {NOTES.map((note, i) => {
                   const isSharp = note.includes("#");
                   const isSelected = selectedKey === note || (useFlats && NOTES_FLAT[i] === selectedKey);
+                  const isPlaying = audioProcessor.activeNotes.includes(note);
                   const displayNote = useFlats ? NOTES_FLAT[i] : note;
                   
                   return (
@@ -589,23 +609,25 @@ export const TonalSyncPlugin = () => {
                       key={note}
                       onClick={() => setSelectedKey(displayNote)}
                       className={cn(
-                        "transition-all duration-150",
+                        "transition-all duration-100 flex flex-col items-center justify-end pb-1",
                         isSharp 
-                          ? "w-6 h-12 -mx-3 z-10 rounded-b-md bg-gray-800 hover:bg-gray-700 border border-gray-700"
-                          : "w-8 h-16 rounded-b-lg bg-white/90 hover:bg-white border border-gray-300",
-                        isSelected && !isSharp && "ring-2 ring-offset-2 ring-offset-black",
-                        isSelected && isSharp && "ring-2"
+                          ? "w-7 h-16 -mx-3.5 z-10 rounded-b-md bg-gray-800 hover:bg-gray-700 border border-gray-700"
+                          : "w-10 h-24 rounded-b-lg bg-white/90 hover:bg-white border border-gray-300",
+                        isSelected && "ring-2 ring-offset-2 ring-offset-black",
+                        isPlaying && !isSharp && "bg-green-200",
+                        isPlaying && isSharp && "bg-green-600"
                       )}
                       style={isSelected ? { 
-                        backgroundColor: isSharp ? currentTheme.primary : undefined,
-                        borderColor: !isSharp ? currentTheme.primary : undefined,
+                        borderColor: currentTheme.primary,
                         ringColor: currentTheme.primary
+                      } : isPlaying ? {
+                        backgroundColor: isSharp ? currentTheme.primary : `${currentTheme.primary}40`
                       } : {}}
                     >
                       <span className={cn(
-                        "text-[8px] font-bold",
-                        isSharp ? "text-white" : "text-gray-600",
-                        isSelected && "text-white"
+                        "text-[9px] font-bold",
+                        isSharp ? "text-white" : "text-gray-500",
+                        (isSelected || isPlaying) && "text-white"
                       )}>
                         {displayNote.replace("#", "").replace("b", "")}
                       </span>
@@ -624,10 +646,10 @@ export const TonalSyncPlugin = () => {
             {audioProcessor.isProcessing && (
               <span className="flex items-center gap-1" style={{ color: currentTheme.primary }}>
                 <span className="w-1.5 h-1.5 rounded-full bg-current animate-pulse" />
-                Processing
+                Live
               </span>
             )}
-            <span>{isClassicMode ? "T-Pain Mode" : "Natural Mode"}</span>
+            <span>{isClassicMode ? "T-Pain" : "Natural"}</span>
           </div>
         </div>
       </div>
