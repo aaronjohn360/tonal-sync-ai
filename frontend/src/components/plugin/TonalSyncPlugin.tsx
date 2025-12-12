@@ -223,6 +223,7 @@ export const TonalSyncPlugin = () => {
             correctionMode={audioProcessor.correctionMode}
             onCorrectionModeChange={audioProcessor.setCorrectionMode}
             isProcessing={audioProcessor.isProcessing}
+            currentPitchShift={audioProcessor.currentPitchShift}
           />
 
           {/* Main controls row */}
