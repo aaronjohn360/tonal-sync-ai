@@ -180,9 +180,11 @@ export const Knob = ({
       </div>
 
       {/* Label */}
-      <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider group-hover:text-foreground transition-colors duration-200">
-        {label}
-      </span>
+      {label && (
+        <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider group-hover:text-foreground transition-colors duration-200">
+          {label}
+        </span>
+      )}
 
       {/* Value display */}
       {showValue && (
