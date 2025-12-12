@@ -136,7 +136,7 @@ export const Knob = ({
             cy="50"
             r="42"
             fill="none"
-            stroke="hsl(var(--primary))"
+            stroke={color === "orange" ? "hsl(30, 100%, 55%)" : color === "blue" ? "hsl(200, 100%, 55%)" : "hsl(var(--primary))"}
             strokeWidth="4"
             strokeLinecap="round"
             strokeDasharray={`${normalizedValue * 2.7 * 2.64} 1000`}
